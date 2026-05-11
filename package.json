@@ -4,7 +4,14 @@
   "version": "0.1.0",
   "type": "module",
   "overrides": {
-    "@opentelemetry/otlp-transformer": "0.214.0"
+    "@opentelemetry/otlp-transformer": "0.214.0",
+    "nanoid": "3.3.11"
+  },
+  "pnpm": {
+    "overrides": {
+      "@opentelemetry/otlp-transformer": "0.214.0",
+      "nanoid": "3.3.11"
+    }
   },
   "scripts": {
     "predev": "sh -c 'lsof -tiTCP:8789,9231 -sTCP:LISTEN | xargs -I {} kill {} 2>/dev/null || true'",
@@ -15,7 +22,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@infisical/sdk": "^5.0.1",
+    "@infisical/sdk": "5.0.1",
     "@opentelemetry/otlp-transformer": "0.214.0"
   },
   "devDependencies": {
