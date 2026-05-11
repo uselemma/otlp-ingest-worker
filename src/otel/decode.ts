@@ -103,6 +103,19 @@ function kvsToDict(values: ProtoKeyValue[] = []): Record<string, unknown> {
   );
 }
 
+function parseAgentIoAttributes(attrs: Record<string, unknown>): void {
+  for (const key of ["ai.agent.input", "ai.agent.output"]) {
+    const value = attrs[key];
+    if (typeof value === "string") {
+      try {
+        attrs[key] = JSON.parse(value);
+      } catch {
+        // Keep the raw string.
+      }
+    }
+  }
+}
+
 function getExportTraceServiceRequestType(): OtlpMessageType {
   const generatedRoot = ((root as { default?: unknown }).default ??
     root) as Record<string, unknown>;
@@ -263,3 +276,5 @@ export function decodeRequest(
     throw new Error("Invalid OTLP payload");
   }
 }
+
+export { parseAgentIoAttributes, kvsToDict, bytesToHex, toNumber };
