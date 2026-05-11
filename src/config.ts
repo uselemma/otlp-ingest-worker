@@ -27,6 +27,13 @@ export interface Env {
   OTEL_PAYLOAD_TTL_SECONDS?: string;
   OTEL_WORKER_AUTH_TOKEN?: string;
   WORKER_SHARED_SECRET?: EnvSecretValue;
+  /**
+   * Local-dev bypass flag. When set to "true", `handleOtlpV1Traces` skips R2 + queue and
+   * dispatches the gzipped payload synchronously to core via the CORE service binding,
+   * because `wrangler dev` queue/R2 simulators are isolated per-process. Production
+   * (where queue + R2 are real shared resources) leaves this unset.
+   */
+  OTLP_DEV_INLINE_DISPATCH?: string;
   OTEL_SPAN_INSERT_QUEUE: Queue<OtelSpanInsertQueueMessage>;
   /** Dead-letter queue producer (manual replay / same pointer shape). */
   OTEL_SPAN_INSERT_DLQ: Queue<OtelSpanInsertQueueMessage>;

@@ -7,3 +7,9 @@ INFISICAL_ENVIRONMENT=dev
 
 # Optional: set WORKER_SHARED_SECRET (and other vars) directly to bypass Infisical for local dev.
 # WORKER_SHARED_SECRET=
+
+# Local-dev only: Wrangler's local Miniflare queue + R2 simulators are isolated per
+# `wrangler dev` process. With this flag the otlp worker skips the queue/R2 round-trip
+# and dispatches the gzipped payload synchronously to core via the CORE service binding.
+# Leave unset in production (real shared queue + R2).
+OTLP_DEV_INLINE_DISPATCH=true

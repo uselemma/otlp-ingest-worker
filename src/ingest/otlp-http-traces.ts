@@ -89,6 +89,49 @@ function resolveProjectId(
 }
 
 /**
+ * Local-dev bypass: post the gzipped Lemma trace JSON straight to core via the CORE
+ * service binding instead of going through R2 + the `otel-span-insert` queue. Required
+ * because Wrangler's local Miniflare queue + R2 simulators are isolated per-process.
+ */
+async function dispatchInlineToCore(
+  env: Env,
+  projectId: string,
+  gzipped: Uint8Array,
+  requestedAt: string,
+): Promise<Response> {
+  const workerSharedSecret =
+    typeof env.WORKER_SHARED_SECRET === "string"
+      ? env.WORKER_SHARED_SECRET.trim()
+      : "";
+  if (!workerSharedSecret) {
+    throw new OtlpHttpTraceError(
+      503,
+      "WORKER_SHARED_SECRET is not configured for inline dispatch",
+    );
+  }
+
+  // payload_key is informational in the inline path (no R2 round-trip), but we still
+  // generate one so logs/workflow correlation in core stay consistent with prod.
+  const payloadKey = `inline:dev/${projectId}/${requestedAt}`;
+
+  return env.CORE.fetch(
+    new Request("https://core.internal/internal/otlp/ingest-inline", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/octet-stream",
+        Authorization: `Bearer ${workerSharedSecret}`,
+        "X-Lemma-Project-ID": projectId,
+        "X-Lemma-Requested-At": requestedAt,
+        "X-Lemma-Payload-Format": LEMMA_TRACE_PAYLOAD_FORMAT,
+        "X-Lemma-Payload-Key": payloadKey,
+        "X-Lemma-Pointer-Version": String(OTLP_PAYLOAD_POINTER_VERSION),
+      },
+      body: toStandaloneArrayBuffer(gzipped),
+    }),
+  );
+}
+
+/**
  * Public OTLP HTTP ingest previously served by the Python API at `POST /otel/v1/traces`.
  */
 export async function handleOtlpV1Traces(
@@ -128,6 +171,24 @@ export async function handleOtlpV1Traces(
     const payload = buildLemmaTracePayload(parsed, projectId, requestedAt);
     const encoded = new TextEncoder().encode(JSON.stringify(payload));
     const gzipped = await gzipBody(encoded);
+
+    if (env.OTLP_DEV_INLINE_DISPATCH === "true") {
+      const inlineResponse = await dispatchInlineToCore(
+        env,
+        projectId,
+        gzipped,
+        requestedAt,
+      );
+      if (inlineResponse.status >= 200 && inlineResponse.status < 300) {
+        return new Response(null, { status: 200 });
+      }
+      const detail = await inlineResponse.text().catch(() => "");
+      return buildJsonError(
+        502,
+        `Inline dispatch to core failed (${inlineResponse.status}): ${detail || "no detail"}`,
+      );
+    }
+
     const payloadKey = await putPayload(
       env,
       projectId,
