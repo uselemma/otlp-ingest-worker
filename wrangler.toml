@@ -1,0 +1,73 @@
+name = "otlp"
+main = "src/index.ts"
+compatibility_date = "2026-04-21"
+compatibility_flags = ["nodejs_compat"]
+
+[[r2_buckets]]
+binding = "OTEL_BUCKET"
+bucket_name = "otel"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = true
+persist = true
+head_sampling_rate = 1
+
+[limits]
+cpu_ms = 5000
+subrequests = 200
+
+[vars]
+OTEL_PAYLOAD_KEY_PREFIX = "otel:payload:v1"
+OTEL_PAYLOAD_TTL_SECONDS = "3600"
+
+[[services]]
+binding = "CORE"
+service = "core"
+
+[[secrets_store_secrets]]
+binding = "INFISICAL_CLIENT_ID"
+store_id = "c4ce9025292146d0a6a1deaba55aa24e"
+secret_name = "INFISICAL_CLIENT_ID"
+
+[[secrets_store_secrets]]
+binding = "INFISICAL_CLIENT_SECRET"
+store_id = "c4ce9025292146d0a6a1deaba55aa24e"
+secret_name = "INFISICAL_CLIENT_SECRET"
+
+[[secrets_store_secrets]]
+binding = "INFISICAL_ENVIRONMENT"
+store_id = "c4ce9025292146d0a6a1deaba55aa24e"
+secret_name = "INFISICAL_ENVIRONMENT"
+
+[[secrets_store_secrets]]
+binding = "INFISICAL_PROJECT_ID"
+store_id = "c4ce9025292146d0a6a1deaba55aa24e"
+secret_name = "INFISICAL_PROJECT_ID"
+
+[[secrets_store_secrets]]
+binding = "WORKER_SHARED_SECRET"
+store_id = "c4ce9025292146d0a6a1deaba55aa24e"
+secret_name = "WORKER_SHARED_SECRET"
+
+[[queues.producers]]
+binding = "OTEL_SPAN_INSERT_QUEUE"
+queue = "otel-span-insert"
+
+[[queues.producers]]
+binding = "OTEL_SPAN_INSERT_DLQ"
+queue = "otel-span-insert-dlq"
+
+[[rules]]
+type = "Text"
+globs = ["**/*.md"]
+fallthrough = true

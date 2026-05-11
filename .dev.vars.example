@@ -1,0 +1,9 @@
+# Infisical universal-auth credentials (align with the platform `core` worker secrets).
+# resolveEnv() uses these to pull secrets from Infisical at request time.
+INFISICAL_CLIENT_ID=
+INFISICAL_CLIENT_SECRET=
+INFISICAL_PROJECT_ID=
+INFISICAL_ENVIRONMENT=dev
+
+# Optional: set WORKER_SHARED_SECRET (and other vars) directly to bypass Infisical for local dev.
+# WORKER_SHARED_SECRET=
