@@ -4,6 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as otlpHttpAuth from "../src/auth/otlp-http-auth";
 import type { Env, OtelSpanInsertQueueMessage } from "../src/config";
 import worker from "../src/index";
+import {
+  LEMMA_TRACE_PAYLOAD_FORMAT,
+  LEMMA_TRACE_PAYLOAD_VERSION,
+} from "../src/otel/lemma-trace-payload";
+import { OTLP_PAYLOAD_POINTER_VERSION } from "../src/shared/common/index";
 
 vi.mock("../src/auth/otlp-http-auth", () => ({
   validateOtlpHttpAuth: vi.fn(),
@@ -135,6 +140,14 @@ function jsonPayload(): Uint8Array {
   );
 }
 
+async function gunzipBody(body: Uint8Array): Promise<Uint8Array> {
+  const stream = new DecompressionStream("gzip");
+  const decompressed = await new Response(
+    new Blob([asRequestBody(body)]).stream().pipeThrough(stream),
+  ).arrayBuffer();
+  return new Uint8Array(decompressed);
+}
+
 describe("POST /otel/v1/traces", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -185,10 +198,40 @@ describe("POST /otel/v1/traces", () => {
       project_id: string;
       payload_key: string;
       requested_at: string;
+      payload_format: string;
+      version: number;
     };
     expect(sent.project_id).toBe(PROJECT_ID);
     expect(sent.payload_key).toContain(`otel:payload:v1/${PROJECT_ID}/`);
     expect(typeof sent.requested_at).toBe("string");
+    expect(sent.payload_format).toBe(LEMMA_TRACE_PAYLOAD_FORMAT);
+    expect(sent.version).toBe(OTLP_PAYLOAD_POINTER_VERSION);
+
+    const putArgs = (env.OTEL_BUCKET.put as ReturnType<typeof vi.fn>).mock
+      .calls[0];
+    const storedBody = putArgs[1] as Uint8Array;
+    const decodedBody = await gunzipBody(storedBody);
+    const payload = JSON.parse(new TextDecoder().decode(decodedBody)) as {
+      format: string;
+      version: number;
+      project_id: string;
+      traces: Array<{ otel_trace_id: string; service_name: string }>;
+      spans: Array<{ trace_id_hex: string; otel_span_id: string }>;
+    };
+    expect(payload.format).toBe(LEMMA_TRACE_PAYLOAD_FORMAT);
+    expect(payload.version).toBe(LEMMA_TRACE_PAYLOAD_VERSION);
+    expect(payload.project_id).toBe(PROJECT_ID);
+    expect(payload.traces).toEqual([
+      { otel_trace_id: TRACE_ID, service_name: "router-test" },
+    ]);
+    expect(payload.spans).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          trace_id_hex: TRACE_ID,
+          otel_span_id: SPAN_ID,
+        }),
+      ]),
+    );
   });
 
   it("accepts JSON payload", async () => {
@@ -208,6 +251,15 @@ describe("POST /otel/v1/traces", () => {
     const putArgs = (env.OTEL_BUCKET.put as ReturnType<typeof vi.fn>).mock
       .calls[0];
     expect(putArgs[2].httpMetadata.contentType).toBe("application/json");
+    const queue = env.OTEL_SPAN_INSERT_QUEUE as unknown as {
+      send: ReturnType<typeof vi.fn>;
+    };
+    const sent = queue.send.mock.calls[0][0] as {
+      payload_format: string;
+      version: number;
+    };
+    expect(sent.payload_format).toBe(LEMMA_TRACE_PAYLOAD_FORMAT);
+    expect(sent.version).toBe(OTLP_PAYLOAD_POINTER_VERSION);
   });
 
   it("accepts gzip content-encoding", async () => {

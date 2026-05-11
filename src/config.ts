@@ -11,6 +11,8 @@ export interface OtelSpanInsertQueueMessage {
   project_id: string;
   requested_at: string;
   payload_key: string;
+  payload_format: string;
+  version: number;
 }
 
 export interface Env {

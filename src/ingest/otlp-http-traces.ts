@@ -1,7 +1,10 @@
 import type { Env, OtelSpanInsertQueueMessage } from "../config";
 import { validateOtlpHttpAuth } from "../auth/otlp-http-auth";
 import { decodeRequest } from "../otel/decode";
+import { buildLemmaTracePayload } from "../otel/build-payload";
+import { LEMMA_TRACE_PAYLOAD_FORMAT } from "../otel/lemma-trace-payload";
 import { putPayload } from "../r2/payload-store";
+import { OTLP_PAYLOAD_POINTER_VERSION } from "../shared/common/index";
 
 const PROTOBUF_CONTENT_TYPE = "application/x-protobuf";
 const JSON_CONTENT_TYPE = "application/json";
@@ -114,20 +117,31 @@ export async function handleOtlpV1Traces(
       return buildJsonError(415, "Unsupported OTLP content type");
     }
 
+    let parsed;
     try {
-      decodeRequest(decoded, contentType);
+      parsed = decodeRequest(decoded, contentType);
     } catch {
       return buildJsonError(400, "Invalid OTLP payload");
     }
 
     const requestedAt = new Date().toISOString();
-    const gzipped = await gzipBody(decoded);
-    const payloadKey = await putPayload(env, projectId, gzipped, requestedAt, contentType);
+    const payload = buildLemmaTracePayload(parsed, projectId, requestedAt);
+    const encoded = new TextEncoder().encode(JSON.stringify(payload));
+    const gzipped = await gzipBody(encoded);
+    const payloadKey = await putPayload(
+      env,
+      projectId,
+      gzipped,
+      requestedAt,
+      "application/json",
+    );
 
     await env.OTEL_SPAN_INSERT_QUEUE.send({
       project_id: projectId,
       requested_at: requestedAt,
       payload_key: payloadKey,
+      payload_format: LEMMA_TRACE_PAYLOAD_FORMAT,
+      version: OTLP_PAYLOAD_POINTER_VERSION,
     } as OtelSpanInsertQueueMessage);
 
     return new Response(null, { status: 200 });
