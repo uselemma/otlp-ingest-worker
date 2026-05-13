@@ -7,6 +7,23 @@ compatibility_flags = ["nodejs_compat"]
 binding = "OTEL_BUCKET"
 bucket_name = "otel"
 
+# Observability export (Dash0 via OTLP HTTP)
+# -----------------------------------------------------------------------------
+# Mirrors workers/core in lemma-platform. Destinations are account-scoped — share
+# the same `dash-zero-prod-logs` / `dash-zero-prod-traces` destinations created
+# for core (Cloudflare → Workers → Observability → Add destination). Dash0
+# disambiguates senders via `cf.worker.name` resource attributes.
+# Setup steps (one-time, only if destinations don't already exist):
+# 1. In Dash0: Organization settings → copy your OTLP HTTP base URL.
+# 2. In Cloudflare: Workers → Observability → Add destination, one per signal:
+#      - Logs:   {BASE}/v1/logs   → name `dash-zero-prod-logs`
+#      - Traces: {BASE}/v1/traces → name `dash-zero-prod-traces`
+#    Custom headers on every destination:
+#      - Authorization: Bearer auth_<your-dash0-token>
+#      - Dash0-Dataset: prod   OR   dev
+# 3. Until destinations exist in the dashboard, comment out the
+#    `destinations = [...]` lines below or deploy will fail validation.
+# -----------------------------------------------------------------------------
 [observability]
 enabled = true
 head_sampling_rate = 1
@@ -16,11 +33,13 @@ enabled = true
 head_sampling_rate = 1
 persist = true
 invocation_logs = true
+destinations = ["dash-zero-prod-logs"]
 
 [observability.traces]
 enabled = true
 persist = true
 head_sampling_rate = 1
+destinations = ["dash-zero-prod-traces"]
 
 [limits]
 cpu_ms = 5000
