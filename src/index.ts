@@ -1,4 +1,5 @@
 import { resolveEnv, type Env } from "./config";
+import { TraceBuffer } from "./fde_solutions";
 import { handleOtlpV1Traces } from "./ingest/otlp-http-traces";
 
 function buildJsonError(status: number, detail: string): Response {
@@ -27,3 +28,5 @@ export default {
     return buildJsonError(404, "Not found");
   },
 };
+
+export { TraceBuffer };

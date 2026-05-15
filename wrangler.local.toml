@@ -16,6 +16,14 @@ bucket_name = "otel"
 OTEL_PAYLOAD_KEY_PREFIX = "otel:payload:v1"
 OTEL_PAYLOAD_TTL_SECONDS = "3600"
 
+[[durable_objects.bindings]]
+name = "TRACE_BUFFER"
+class_name = "TraceBuffer"
+
+[[migrations]]
+tag = "v1-trace-buffer"
+new_sqlite_classes = ["TraceBuffer"]
+
 [[services]]
 binding = "CORE"
 service = "core"

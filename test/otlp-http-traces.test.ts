@@ -48,6 +48,10 @@ function makeEnv(): Env {
       put: vi.fn(async () => undefined),
     } as unknown as R2Bucket,
     CORE: {} as unknown as Fetcher,
+    TRACE_BUFFER: {
+      idFromName: vi.fn(),
+      get: vi.fn(),
+    } as unknown as DurableObjectNamespace,
   } as unknown as Env;
 }
 

@@ -22,6 +22,10 @@ function makeEnv(): { env: Env } {
     } as unknown as Queue<OtelSpanInsertQueueMessage>,
     OTEL_BUCKET: {} as unknown as R2Bucket,
     CORE: {} as unknown as Fetcher,
+    TRACE_BUFFER: {
+      idFromName: vi.fn(),
+      get: vi.fn(),
+    } as unknown as DurableObjectNamespace,
   } as unknown as Env;
 
   return { env };

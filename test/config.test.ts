@@ -20,6 +20,10 @@ describe("resolveEnv", () => {
       OTEL_SPAN_INSERT_DLQ: {} as Queue<{ project_id: string; requested_at: string; payload_key: string }>,
       OTEL_BUCKET: {} as R2Bucket,
       CORE: {} as Fetcher,
+      TRACE_BUFFER: {
+        idFromName: vi.fn(),
+        get: vi.fn(),
+      } as unknown as DurableObjectNamespace,
     } as unknown as Parameters<typeof resolveEnv>[0]);
 
     expect(workerSecretBinding.get).toHaveBeenCalledTimes(1);

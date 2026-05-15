@@ -1,10 +1,11 @@
-import type { Env, OtelSpanInsertQueueMessage } from "../config";
+import type { Env } from "../config";
 import { validateOtlpHttpAuth } from "../auth/otlp-http-auth";
-import { decodeRequest } from "../otel/decode";
-import { buildLemmaTracePayload } from "../otel/build-payload";
-import { LEMMA_TRACE_PAYLOAD_FORMAT } from "../otel/lemma-trace-payload";
-import { putPayload } from "../r2/payload-store";
-import { OTLP_PAYLOAD_POINTER_VERSION } from "../shared/common/index";
+import { resolveSolutionForProject } from "../fde_solutions";
+import { decodeRequest, type ProtoExportTraceServiceRequest } from "../otel/decode";
+import {
+  OtlpHttpTraceError,
+  runStandardIngest,
+} from "../pipeline/run-standard-ingest";
 
 const PROTOBUF_CONTENT_TYPE = "application/x-protobuf";
 const JSON_CONTENT_TYPE = "application/json";
@@ -39,21 +40,14 @@ function toStandaloneArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return out;
 }
 
-class OtlpHttpTraceError extends Error {
-  constructor(
-    public readonly status: number,
-    message: string,
-  ) {
-    super(message);
-    this.name = "OtlpHttpTraceError";
-  }
-}
-
 async function gunzipBody(
   body: Uint8Array,
   contentEncoding: string | null,
 ): Promise<Uint8Array> {
-  const encoding = (contentEncoding ?? "").split(";", 1)[0].trim().toLowerCase();
+  const encoding = (contentEncoding ?? "")
+    .split(";", 1)[0]
+    .trim()
+    .toLowerCase();
   if (!encoding || encoding === "identity") {
     return body;
   }
@@ -71,65 +65,12 @@ async function gunzipBody(
   }
 }
 
-async function gzipBody(body: Uint8Array): Promise<Uint8Array> {
-  const stream = new CompressionStream("gzip");
-  const compressed = await new Response(
-    new Blob([toStandaloneArrayBuffer(body)]).stream().pipeThrough(stream),
-  ).arrayBuffer();
-  return new Uint8Array(compressed);
-}
-
-function resolveProjectId(
-  request: Request,
-  url: URL,
-): string | null {
+function resolveProjectId(request: Request, url: URL): string | null {
   const header = request.headers.get("X-Lemma-Project-ID");
   const query = url.searchParams.get("project_id");
   return header ?? query;
 }
 
-/**
- * Local-dev bypass: post the gzipped Lemma trace JSON straight to core via the CORE
- * service binding instead of going through R2 + the `otel-span-insert` queue. Required
- * because Wrangler's local Miniflare queue + R2 simulators are isolated per-process.
- */
-async function dispatchInlineToCore(
-  env: Env,
-  projectId: string,
-  gzipped: Uint8Array,
-  requestedAt: string,
-): Promise<Response> {
-  const workerSharedSecret =
-    typeof env.WORKER_SHARED_SECRET === "string"
-      ? env.WORKER_SHARED_SECRET.trim()
-      : "";
-  if (!workerSharedSecret) {
-    throw new OtlpHttpTraceError(
-      503,
-      "WORKER_SHARED_SECRET is not configured for inline dispatch",
-    );
-  }
-
-  // payload_key is informational in the inline path (no R2 round-trip), but we still
-  // generate one so logs/workflow correlation in core stay consistent with prod.
-  const payloadKey = `inline:dev/${projectId}/${requestedAt}`;
-
-  return env.CORE.fetch(
-    new Request("https://core.internal/internal/otlp/ingest-inline", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/octet-stream",
-        Authorization: `Bearer ${workerSharedSecret}`,
-        "X-Lemma-Project-ID": projectId,
-        "X-Lemma-Requested-At": requestedAt,
-        "X-Lemma-Payload-Format": LEMMA_TRACE_PAYLOAD_FORMAT,
-        "X-Lemma-Payload-Key": payloadKey,
-        "X-Lemma-Pointer-Version": String(OTLP_PAYLOAD_POINTER_VERSION),
-      },
-      body: toStandaloneArrayBuffer(gzipped),
-    }),
-  );
-}
 
 /**
  * Public OTLP HTTP ingest previously served by the Python API at `POST /otel/v1/traces`.
@@ -153,59 +94,55 @@ export async function handleOtlpV1Traces(
   }
 
   try {
-    const raw = new Uint8Array(await request.arrayBuffer());
-    const decoded = await gunzipBody(raw, request.headers.get("content-encoding"));
-    const contentType = normalizeMediaType(request.headers.get("content-type"));
-    if (!SUPPORTED_CONTENT_TYPES.has(contentType)) {
-      return buildJsonError(415, "Unsupported OTLP content type");
-    }
-
-    let parsed;
-    try {
-      parsed = decodeRequest(decoded, contentType);
-    } catch {
-      return buildJsonError(400, "Invalid OTLP payload");
-    }
-
     const requestedAt = new Date().toISOString();
-    const payload = buildLemmaTracePayload(parsed, projectId, requestedAt);
-    const encoded = new TextEncoder().encode(JSON.stringify(payload));
-    const gzipped = await gzipBody(encoded);
+    let parsedMemo: ProtoExportTraceServiceRequest | null = null;
 
-    if (env.OTLP_DEV_INLINE_DISPATCH === "true") {
-      const inlineResponse = await dispatchInlineToCore(
+    const decodeRequestMemoized =
+      async (): Promise<ProtoExportTraceServiceRequest> => {
+        if (parsedMemo) {
+          return parsedMemo;
+        }
+        const raw = new Uint8Array(await request.arrayBuffer());
+        const decoded = await gunzipBody(
+          raw,
+          request.headers.get("content-encoding"),
+        );
+        const contentType = normalizeMediaType(request.headers.get("content-type"));
+        if (!SUPPORTED_CONTENT_TYPES.has(contentType)) {
+          throw new OtlpHttpTraceError(415, "Unsupported OTLP content type");
+        }
+        try {
+          parsedMemo = decodeRequest(decoded, contentType);
+          return parsedMemo;
+        } catch {
+          throw new OtlpHttpTraceError(400, "Invalid OTLP payload");
+        }
+      };
+
+    // FDE solutions take precedence over the standard pipeline. They run after
+    // auth + project_id validation but BEFORE we read/decode the body, so a
+    // matched solution can choose to no-op, transform, or short-circuit.
+    const fdeSolution = resolveSolutionForProject(projectId);
+    if (fdeSolution) {
+      console.log("fde_solution.matched", {
+        solution: fdeSolution.name,
+        project_id: projectId,
+        requested_at: requestedAt,
+      });
+      return fdeSolution.handle({
+        request,
         env,
+        url,
         projectId,
-        gzipped,
         requestedAt,
-      );
-      if (inlineResponse.status >= 200 && inlineResponse.status < 300) {
-        return new Response(null, { status: 200 });
-      }
-      const detail = await inlineResponse.text().catch(() => "");
-      return buildJsonError(
-        502,
-        `Inline dispatch to core failed (${inlineResponse.status}): ${detail || "no detail"}`,
-      );
+        decodeRequest: decodeRequestMemoized,
+        runStandardIngest: async (parsed) =>
+          runStandardIngest({ env, projectId, requestedAt, parsed }),
+      });
     }
 
-    const payloadKey = await putPayload(
-      env,
-      projectId,
-      gzipped,
-      requestedAt,
-      "application/json",
-    );
-
-    await env.OTEL_SPAN_INSERT_QUEUE.send({
-      project_id: projectId,
-      requested_at: requestedAt,
-      payload_key: payloadKey,
-      payload_format: LEMMA_TRACE_PAYLOAD_FORMAT,
-      version: OTLP_PAYLOAD_POINTER_VERSION,
-    } as OtelSpanInsertQueueMessage);
-
-    return new Response(null, { status: 200 });
+    const parsed = await decodeRequestMemoized();
+    return runStandardIngest({ env, projectId, requestedAt, parsed });
   } catch (error) {
     if (error instanceof OtlpHttpTraceError) {
       return buildJsonError(error.status, error.message);

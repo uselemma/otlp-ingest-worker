@@ -34,11 +34,16 @@ export interface Env {
    * (where queue + R2 are real shared resources) leaves this unset.
    */
   OTLP_DEV_INLINE_DISPATCH?: string;
+  PROCESSOR_BUFFERED_REPARENT_INACTIVITY_MS?: string;
+  PROCESSOR_BUFFERED_REPARENT_MAX_BUFFER_MS?: string;
+  PROCESSOR_BUFFERED_REPARENT_MAX_SPANS_PER_TRACE?: string;
+  PROCESSOR_BUFFERED_REPARENT_MAX_DISPATCH_RETRIES?: string;
   OTEL_SPAN_INSERT_QUEUE: Queue<OtelSpanInsertQueueMessage>;
   /** Dead-letter queue producer (manual replay / same pointer shape). */
   OTEL_SPAN_INSERT_DLQ: Queue<OtelSpanInsertQueueMessage>;
   OTEL_BUCKET: R2Bucket;
   CORE: Fetcher;
+  TRACE_BUFFER: DurableObjectNamespace;
 }
 
 const REQUIRED_ENV_KEYS = [
