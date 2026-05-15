@@ -20,6 +20,7 @@ const AI_STREAM_TEXT = "ai.streamText";
 const AI_STREAM_TEXT_PARENT = "ai.agent";
 const AI_AGENT_OPERATION_ID = "ai.agent.run";
 const AI_STREAM_TEXT_DO_STREAM = "ai.streamText.doStream";
+const AI_GENERATE_OBJECT_PREFIX = "ai.generateObject";
 const AI_SPAN_PREFIX = "ai.";
 const AI_TOOLCALL_SPAN_NAME = "ai.toolCall";
 const PROCESSOR_TOOL = "Processor.tool";
@@ -269,6 +270,7 @@ function collectInvariantMetadataAttributes(spans: ProtoSpan[]): ProtoKeyValue[]
   for (const attr of firstAttrs) {
     const key = attr.key;
     if (RESERVED_AGENT_ATTR_KEYS.has(key)) continue;
+    if (AGENT_NAME_ATTR_KEYS.includes(key)) continue;
     if (INPUT_ATTR_KEYS.has(key)) continue;
     if (isOutputAttributeKey(key)) continue;
     const expected = attributeValueToStableString(attr);
@@ -329,12 +331,42 @@ function getAgentNameForGrouping(span: ProtoSpan): string {
   return "";
 }
 
+function getSessionIdForGrouping(span: ProtoSpan): string {
+  const threadId = getAttribute(span, "lemma.thread_id")?.value?.stringValue;
+  if (typeof threadId === "string" && threadId.trim().length > 0) {
+    return threadId.trim();
+  }
+  const sessionId = getAttribute(span, "session.id")?.value?.stringValue;
+  if (typeof sessionId === "string" && sessionId.trim().length > 0) {
+    return sessionId.trim();
+  }
+  return "";
+}
+
 function makeAgentGroupKey(
   traceIdHex: string,
   parentSpanIdHex: string,
   agentName: string,
+  sessionId: string,
 ): string {
-  return `${traceIdHex}|${parentSpanIdHex}|${agentName}`;
+  return `${traceIdHex}|${parentSpanIdHex}|${agentName}|${sessionId}`;
+}
+
+function makeToolResultScopeKey(
+  traceIdHex: string,
+  agentName: string,
+  sessionId: string,
+): string {
+  return `${traceIdHex}|${agentName}|${sessionId}`;
+}
+
+function derivedTraceIdHex(groupKey: string): string {
+  return [
+    stableHashHex(`trace:${groupKey}:0`),
+    stableHashHex(`trace:${groupKey}:1`),
+    stableHashHex(`trace:${groupKey}:2`),
+    stableHashHex(`trace:${groupKey}:3`),
+  ].join("");
 }
 
 function spanStartNs(span: ProtoSpan): number {
@@ -400,17 +432,83 @@ function toAgentThreadIdAttribute(spans: ProtoSpan[]): ProtoKeyValue[] {
   return [];
 }
 
+function toCanonicalAgentNameAttribute(agentName: string): ProtoKeyValue[] {
+  if (!agentName) return [];
+  return [
+    {
+      key: "gen_ai.agent.name",
+      value: { stringValue: agentName },
+    },
+  ];
+}
+
+function getStreamTextGroupKey(span: ProtoSpan): string | undefined {
+  const traceIdHex = bytesToHex(span.traceId);
+  if (!traceIdHex) return undefined;
+  return makeAgentGroupKey(
+    traceIdHex,
+    bytesToHex(span.parentSpanId),
+    getAgentNameForGrouping(span),
+    getSessionIdForGrouping(span),
+  );
+}
+
+function getToolResultScopeKey(span: ProtoSpan): string | undefined {
+  const traceIdHex = bytesToHex(span.traceId);
+  if (!traceIdHex) return undefined;
+  return makeToolResultScopeKey(
+    traceIdHex,
+    getAgentNameForGrouping(span),
+    getSessionIdForGrouping(span),
+  );
+}
+
+function buildToolResultsByStreamTextScope(request: ProtoExportTraceServiceRequest): {
+  byGroup: Map<string, Map<string, PromptToolCall>>;
+  byResultScope: Map<string, Map<string, PromptToolCall>>;
+} {
+  const byGroup = new Map<string, Map<string, PromptToolCall>>();
+  const byResultScope = new Map<string, Map<string, PromptToolCall>>();
+
+  for (const resourceSpan of request.resourceSpans ?? []) {
+    for (const scopeSpan of resourceSpan.scopeSpans ?? []) {
+      for (const span of scopeSpan.spans ?? []) {
+        if (span.name !== AI_STREAM_TEXT) continue;
+        const groupKey = getStreamTextGroupKey(span);
+        const resultScopeKey = getToolResultScopeKey(span);
+        if (!groupKey) continue;
+        const promptCalls = parsePromptToolCalls(getStringAttribute(span, "ai.prompt"));
+        for (const call of promptCalls) {
+          if (call.result === undefined) continue;
+          const groupResults = byGroup.get(groupKey) ?? new Map<string, PromptToolCall>();
+          groupResults.set(call.id, call);
+          byGroup.set(groupKey, groupResults);
+          if (resultScopeKey) {
+            const scopedResults =
+              byResultScope.get(resultScopeKey) ?? new Map<string, PromptToolCall>();
+            scopedResults.set(call.id, call);
+            byResultScope.set(resultScopeKey, scopedResults);
+          }
+        }
+      }
+    }
+  }
+
+  return { byGroup, byResultScope };
+}
+
 function uniqueSyntheticStreamParentSpanId(
   traceIdHex: string,
+  groupKey: string,
   existing: Set<string>,
 ): string {
-  let candidate = `${stableHashHex(`${traceIdHex}:ai.agent`)}${stableHashHex(`lemma:${traceIdHex}:parent`)}`;
+  let candidate = `${stableHashHex(`${traceIdHex}:ai.agent:${groupKey}`)}${stableHashHex(`lemma:${traceIdHex}:parent:${groupKey}`)}`;
   if (!existing.has(candidate)) {
     return candidate;
   }
   let salt = 1;
   while (existing.has(candidate)) {
-    candidate = `${stableHashHex(`${traceIdHex}:ai.agent:${salt}`)}${stableHashHex(`lemma:${traceIdHex}:parent:${salt}`)}`;
+    candidate = `${stableHashHex(`${traceIdHex}:ai.agent:${groupKey}:${salt}`)}${stableHashHex(`lemma:${traceIdHex}:parent:${groupKey}:${salt}`)}`;
     salt += 1;
   }
   return candidate;
@@ -419,7 +517,11 @@ function uniqueSyntheticStreamParentSpanId(
 function addSyntheticStreamTextParents(
   request: ProtoExportTraceServiceRequest,
   existingSpanIds: Set<string>,
-): { parentsAdded: number; parentSpanIdByGroup: Map<string, string> } {
+): {
+  parentsAdded: number;
+  parentSpanIdByGroup: Map<string, string>;
+  originalTraceIdByGroup: Map<string, string>;
+} {
   type SpanRef = { span: ProtoSpan; scopeSpan: ProtoScopeSpan };
   const streamTextRefsByGroup = new Map<string, SpanRef[]>();
 
@@ -427,15 +529,8 @@ function addSyntheticStreamTextParents(
     for (const scopeSpan of resourceSpan.scopeSpans ?? []) {
       for (const span of scopeSpan.spans ?? []) {
         if (span.name !== AI_STREAM_TEXT) continue;
-        const traceIdHex = bytesToHex(span.traceId);
-        if (!traceIdHex) continue;
-        const parentSpanIdHex = bytesToHex(span.parentSpanId);
-        const agentName = getAgentNameForGrouping(span);
-        const groupKey = makeAgentGroupKey(
-          traceIdHex,
-          parentSpanIdHex,
-          agentName,
-        );
+        const groupKey = getStreamTextGroupKey(span);
+        if (!groupKey) continue;
         const refs = streamTextRefsByGroup.get(groupKey);
         const ref: SpanRef = { span, scopeSpan };
         if (refs) refs.push(ref);
@@ -446,10 +541,12 @@ function addSyntheticStreamTextParents(
 
   let parentsAdded = 0;
   const parentSpanIdByGroup = new Map<string, string>();
+  const originalTraceIdByGroup = new Map<string, string>();
   for (const [groupKey, refs] of streamTextRefsByGroup.entries()) {
     if (refs.length === 0) continue;
     const traceIdHex = bytesToHex(refs[0]!.span.traceId);
     if (!traceIdHex) continue;
+    const agentName = getAgentNameForGrouping(refs[0]!.span);
     refs.sort((left, right) => {
       const startLeft = spanStartNs(left.span);
       const startRight = spanStartNs(right.span);
@@ -461,6 +558,7 @@ function addSyntheticStreamTextParents(
 
     const syntheticParentSpanIdHex = uniqueSyntheticStreamParentSpanId(
       traceIdHex,
+      groupKey,
       existingSpanIds,
     );
     existingSpanIds.add(syntheticParentSpanIdHex);
@@ -500,6 +598,7 @@ function addSyntheticStreamTextParents(
     const threadIdAttributes = toAgentThreadIdAttribute(
       refs.map((ref) => ref.span),
     );
+    const agentNameAttributes = toCanonicalAgentNameAttribute(agentName);
     const invariantMetadata = collectInvariantMetadataAttributes(
       refs.map((ref) => ref.span),
     );
@@ -541,6 +640,7 @@ function addSyntheticStreamTextParents(
       attributes: mergeAttributesByKey(
         invariantMetadata,
         threadIdAttributes,
+        agentNameAttributes,
         aiAgentInputOutput,
         carriedAttributes,
         baseAttributes,
@@ -549,6 +649,7 @@ function addSyntheticStreamTextParents(
 
     refs[0]!.scopeSpan.spans = [...(refs[0]!.scopeSpan.spans ?? []), syntheticParentSpan];
     parentSpanIdByGroup.set(groupKey, syntheticParentSpanIdHex);
+    originalTraceIdByGroup.set(groupKey, traceIdHex);
 
     for (const ref of refs) {
       ref.span.parentSpanId = hexToBytes(syntheticParentSpanIdHex);
@@ -556,7 +657,7 @@ function addSyntheticStreamTextParents(
     parentsAdded += 1;
   }
 
-  return { parentsAdded, parentSpanIdByGroup };
+  return { parentsAdded, parentSpanIdByGroup, originalTraceIdByGroup };
 }
 
 function reparentTopLevelAiSpansUnderAgent(
@@ -575,10 +676,67 @@ function reparentTopLevelAiSpansUnderAgent(
           traceIdHex,
           "",
           getAgentNameForGrouping(span),
+          getSessionIdForGrouping(span),
         );
         const agentSpanIdHex = parentSpanIdByGroup.get(groupKey);
         if (!agentSpanIdHex) continue;
         span.parentSpanId = hexToBytes(agentSpanIdHex);
+      }
+    }
+  }
+}
+
+function rewriteGroupedTraceIds(
+  request: ProtoExportTraceServiceRequest,
+  parentSpanIdByGroup: Map<string, string>,
+  originalTraceIdByGroup: Map<string, string>,
+): void {
+  const childrenByParent = new Map<string, ProtoSpan[]>();
+  const spanById = new Map<string, ProtoSpan>();
+
+  for (const resourceSpan of request.resourceSpans ?? []) {
+    for (const scopeSpan of resourceSpan.scopeSpans ?? []) {
+      for (const span of scopeSpan.spans ?? []) {
+        const spanIdHex = bytesToHex(span.spanId);
+        if (spanIdHex) {
+          spanById.set(spanIdHex, span);
+        }
+        const parentSpanIdHex = bytesToHex(span.parentSpanId);
+        if (!parentSpanIdHex) continue;
+        const children = childrenByParent.get(parentSpanIdHex);
+        if (children) children.push(span);
+        else childrenByParent.set(parentSpanIdHex, [span]);
+      }
+    }
+  }
+
+  const groupsByOriginalTrace = new Map<string, string[]>();
+  for (const [groupKey, originalTraceIdHex] of originalTraceIdByGroup.entries()) {
+    const groupKeys = groupsByOriginalTrace.get(originalTraceIdHex);
+    if (groupKeys) groupKeys.push(groupKey);
+    else groupsByOriginalTrace.set(originalTraceIdHex, [groupKey]);
+  }
+
+  for (const [groupKey, agentSpanIdHex] of parentSpanIdByGroup.entries()) {
+    const agentSpan = spanById.get(agentSpanIdHex);
+    const originalTraceIdHex = originalTraceIdByGroup.get(groupKey);
+    if (!agentSpan || !originalTraceIdHex) continue;
+    const groupCount = groupsByOriginalTrace.get(originalTraceIdHex)?.length ?? 0;
+    if (groupCount <= 1) continue;
+
+    const nextTraceId = hexToBytes(derivedTraceIdHex(groupKey));
+    const stack = [agentSpan];
+    const visited = new Set<string>();
+    while (stack.length > 0) {
+      const span = stack.pop()!;
+      const spanIdHex = bytesToHex(span.spanId);
+      if (spanIdHex) {
+        if (visited.has(spanIdHex)) continue;
+        visited.add(spanIdHex);
+      }
+      span.traceId = nextTraceId;
+      for (const child of childrenByParent.get(spanIdHex) ?? []) {
+        stack.push(child);
       }
     }
   }
@@ -618,6 +776,7 @@ export function applySyntheticToolSpans(
       }
     }
   }
+  const toolResultsByStreamTextScope = buildToolResultsByStreamTextScope(request);
 
   for (const resourceSpan of request.resourceSpans ?? []) {
     for (const scopeSpan of resourceSpan.scopeSpans ?? []) {
@@ -647,9 +806,24 @@ export function applySyntheticToolSpans(
             : undefined);
         const promptCalls = parsePromptToolCalls(promptRaw);
         const promptById = new Map(promptCalls.map((call) => [call.id, call]));
+        const groupResultsById =
+          parentStreamText?.name === AI_STREAM_TEXT
+            ? toolResultsByStreamTextScope.byGroup.get(
+                getStreamTextGroupKey(parentStreamText) ?? "",
+              )
+            : undefined;
+        const scopedResultsById =
+          parentStreamText?.name === AI_STREAM_TEXT
+            ? toolResultsByStreamTextScope.byResultScope.get(
+                getToolResultScopeKey(parentStreamText) ?? "",
+              )
+            : undefined;
         const toolCalls = responseToolCalls.map((call) => ({
           ...call,
-          result: promptById.get(call.id)?.result,
+          result:
+            promptById.get(call.id)?.result ??
+            groupResultsById?.get(call.id)?.result ??
+            scopedResultsById?.get(call.id)?.result,
         }));
         if (toolCalls.length === 0) continue;
 
@@ -707,6 +881,13 @@ export function applySyntheticToolSpans(
             stats.processor_tool_spans_removed += 1;
             return false;
           }
+          if (
+            typeof span.name === "string" &&
+            span.name.startsWith(AI_GENERATE_OBJECT_PREFIX)
+          ) {
+            stats.non_ai_spans_removed += 1;
+            return false;
+          }
           const keepAiSdkOrSynthetic =
             typeof span.name === "string" &&
             span.name.startsWith(AI_SPAN_PREFIX);
@@ -722,12 +903,11 @@ export function applySyntheticToolSpans(
   }
 
   const strippedBeforeMerge = stripMissingParentRefs(request);
-  const { parentsAdded, parentSpanIdByGroup } = addSyntheticStreamTextParents(
-    request,
-    existingSpanIds,
-  );
+  const { parentsAdded, parentSpanIdByGroup, originalTraceIdByGroup } =
+    addSyntheticStreamTextParents(request, existingSpanIds);
   stats.ai_streamtext_parents_added = parentsAdded;
   reparentTopLevelAiSpansUnderAgent(request, parentSpanIdByGroup);
+  rewriteGroupedTraceIds(request, parentSpanIdByGroup, originalTraceIdByGroup);
   const strippedAfterParenting = stripMissingParentRefs(request);
   stats.missing_parent_refs_stripped =
     strippedBeforeMerge + strippedAfterParenting;

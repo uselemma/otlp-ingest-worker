@@ -38,6 +38,8 @@ export interface Env {
   PROCESSOR_BUFFERED_REPARENT_MAX_BUFFER_MS?: string;
   PROCESSOR_BUFFERED_REPARENT_MAX_SPANS_PER_TRACE?: string;
   PROCESSOR_BUFFERED_REPARENT_MAX_DISPATCH_RETRIES?: string;
+  PROCESSOR_BUFFERED_REPARENT_DEBUG_PAYLOADS?: string;
+  PROCESSOR_BUFFERED_REPARENT_DEBUG_PAYLOAD_PREFIX?: string;
   OTEL_SPAN_INSERT_QUEUE: Queue<OtelSpanInsertQueueMessage>;
   /** Dead-letter queue producer (manual replay / same pointer shape). */
   OTEL_SPAN_INSERT_DLQ: Queue<OtelSpanInsertQueueMessage>;

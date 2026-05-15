@@ -25,9 +25,16 @@ export interface TraceBufferMetaState {
 }
 
 export interface StoredSpanEntry {
-  span: BufferedSpanRecord["span"];
+  span?: BufferedSpanRecord["span"];
+  spanR2Key?: string;
   resourceFp: string;
   scopeFp: string;
+}
+
+export interface StoredSpanR2Entry extends StoredSpanEntry {
+  span: BufferedSpanRecord["span"];
+  resource?: ProtoResourceSpan["resource"];
+  scope?: ProtoScopeSpan["scope"];
 }
 
 export type StoredResource = ProtoResourceSpan["resource"];

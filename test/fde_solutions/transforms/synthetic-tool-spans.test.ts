@@ -242,6 +242,210 @@ describe("applySyntheticToolSpans", () => {
     expect(spans.some((span) => span.name === "ai.toolCall")).toBe(false);
   });
 
+  it("enriches synthetic tool spans with results from later ai.streamText prompts in the same group", () => {
+    const request: ProtoExportTraceServiceRequest = {
+      resourceSpans: [
+        {
+          scopeSpans: [
+            {
+              spans: [
+                {
+                  traceId: hexToBytes("acacacacacacacacacacacacacacacac"),
+                  spanId: hexToBytes("1111111111111111"),
+                  parentSpanId: new Uint8Array(),
+                  name: "ai.streamText",
+                  attributes: [
+                    { key: "ai.agent.name", value: { stringValue: "agent-a" } },
+                    { key: "session.id", value: { stringValue: "thread-a" } },
+                    {
+                      key: "ai.prompt",
+                      value: {
+                        stringValue: JSON.stringify({
+                          messages: [{ role: "user", content: [{ type: "text", text: "run" }] }],
+                        }),
+                      },
+                    },
+                  ],
+                },
+                {
+                  traceId: hexToBytes("acacacacacacacacacacacacacacacac"),
+                  spanId: hexToBytes("2222222222222222"),
+                  parentSpanId: hexToBytes("1111111111111111"),
+                  name: "ai.streamText.doStream",
+                  startTimeUnixNano: "100",
+                  endTimeUnixNano: "200",
+                  attributes: [
+                    {
+                      key: "ai.response.toolCalls",
+                      value: {
+                        stringValue: JSON.stringify([
+                          {
+                            toolCallId: "toolu_late",
+                            toolName: "bash",
+                            args: { command: "echo hi" },
+                          },
+                        ]),
+                      },
+                    },
+                  ],
+                },
+                {
+                  traceId: hexToBytes("acacacacacacacacacacacacacacacac"),
+                  spanId: hexToBytes("3333333333333333"),
+                  parentSpanId: new Uint8Array(),
+                  name: "ai.streamText",
+                  attributes: [
+                    { key: "ai.agent.name", value: { stringValue: "agent-a" } },
+                    { key: "session.id", value: { stringValue: "thread-a" } },
+                    {
+                      key: "ai.prompt",
+                      value: {
+                        stringValue: JSON.stringify({
+                          messages: [
+                            {
+                              role: "assistant",
+                              content: [
+                                {
+                                  type: "tool-call",
+                                  toolCallId: "toolu_late",
+                                  toolName: "bash",
+                                  args: { command: "echo hi" },
+                                },
+                              ],
+                            },
+                            {
+                              role: "tool",
+                              content: [
+                                {
+                                  type: "tool-result",
+                                  toolCallId: "toolu_late",
+                                  result: { stdout: "hi\n" },
+                                },
+                              ],
+                            },
+                          ],
+                        }),
+                      },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const { request: transformed, stats } = applySyntheticToolSpans(request);
+    const synthetic = flattenSpans(transformed).find((span) => span.name === "ai.toolCall");
+
+    expect(stats.synthetic_tool_spans_added).toBe(1);
+    expect(synthetic).toBeTruthy();
+    expect(
+      synthetic!.attributes?.find((attribute) => attribute.key === "ai.toolCall.result")
+        ?.value?.stringValue,
+    ).toBe("{\"stdout\":\"hi\\n\"}");
+  });
+
+  it("enriches tool spans from later prompts with different streamText parent groups", () => {
+    const request: ProtoExportTraceServiceRequest = {
+      resourceSpans: [
+        {
+          scopeSpans: [
+            {
+              spans: [
+                {
+                  traceId: hexToBytes("adadadadadadadadadadadadadadadad"),
+                  spanId: hexToBytes("1111111111111111"),
+                  parentSpanId: hexToBytes("aaaaaaaaaaaaaaaa"),
+                  name: "ai.streamText",
+                  attributes: [
+                    { key: "agent.name", value: { stringValue: "do" } },
+                    { key: "session.id", value: { stringValue: "thread-a" } },
+                    {
+                      key: "ai.response.toolCalls",
+                      value: {
+                        stringValue: JSON.stringify([
+                          {
+                            toolCallId: "toolu_cross_parent",
+                            toolName: "bash",
+                            input: { command: "echo hi" },
+                          },
+                        ]),
+                      },
+                    },
+                  ],
+                },
+                {
+                  traceId: hexToBytes("adadadadadadadadadadadadadadadad"),
+                  spanId: hexToBytes("2222222222222222"),
+                  parentSpanId: hexToBytes("1111111111111111"),
+                  name: "ai.streamText.doStream",
+                  startTimeUnixNano: "100",
+                  endTimeUnixNano: "200",
+                  attributes: [
+                    {
+                      key: "ai.response.toolCalls",
+                      value: {
+                        stringValue: JSON.stringify([
+                          {
+                            toolCallId: "toolu_cross_parent",
+                            toolName: "bash",
+                            input: { command: "echo hi" },
+                          },
+                        ]),
+                      },
+                    },
+                  ],
+                },
+                {
+                  traceId: hexToBytes("adadadadadadadadadadadadadadadad"),
+                  spanId: hexToBytes("3333333333333333"),
+                  parentSpanId: hexToBytes("bbbbbbbbbbbbbbbb"),
+                  name: "ai.streamText",
+                  attributes: [
+                    { key: "agent.name", value: { stringValue: "do" } },
+                    { key: "session.id", value: { stringValue: "thread-a" } },
+                    {
+                      key: "ai.prompt",
+                      value: {
+                        stringValue: JSON.stringify({
+                          messages: [
+                            {
+                              role: "tool",
+                              content: [
+                                {
+                                  type: "tool-result",
+                                  toolCallId: "toolu_cross_parent",
+                                  toolName: "bash",
+                                  output: { type: "text", value: "hi\n" },
+                                },
+                              ],
+                            },
+                          ],
+                        }),
+                      },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const { request: transformed, stats } = applySyntheticToolSpans(request);
+    const synthetic = flattenSpans(transformed).find((span) => span.name === "ai.toolCall");
+
+    expect(stats.synthetic_tool_spans_added).toBe(1);
+    expect(synthetic).toBeTruthy();
+    expect(
+      synthetic!.attributes?.find((attribute) => attribute.key === "ai.toolCall.result")
+        ?.value?.stringValue,
+    ).toBe("{\"type\":\"text\",\"value\":\"hi\\n\"}");
+  });
+
   it("keeps individual ai.streamText spans and reparents them under synthetic ai.agent", () => {
     const request: ProtoExportTraceServiceRequest = {
       resourceSpans: [
@@ -280,6 +484,10 @@ describe("applySyntheticToolSpans", () => {
                     {
                       key: "session.id",
                       value: { stringValue: "thread-123" },
+                    },
+                    {
+                      key: "agent.name",
+                      value: { stringValue: "do" },
                     },
                     {
                       key: "langfuse.trace.output",
@@ -322,6 +530,10 @@ describe("applySyntheticToolSpans", () => {
                     {
                       key: "session.id",
                       value: { stringValue: "thread-123" },
+                    },
+                    {
+                      key: "agent.name",
+                      value: { stringValue: "do" },
                     },
                   ],
                 },
@@ -395,6 +607,13 @@ describe("applySyntheticToolSpans", () => {
       parent!.attributes?.find((attribute) => attribute.key === "lemma.thread_id")
         ?.value?.stringValue,
     ).toBe("thread-123");
+    expect(
+      parent!.attributes?.find((attribute) => attribute.key === "gen_ai.agent.name")
+        ?.value?.stringValue,
+    ).toBe("do");
+    expect(
+      parent!.attributes?.some((attribute) => attribute.key === "agent.name"),
+    ).toBe(false);
     expect(
       parent!.attributes?.find((attribute) => attribute.key === "span.type")?.value
         ?.stringValue,
@@ -538,6 +757,79 @@ describe("applySyntheticToolSpans", () => {
     );
   });
 
+  it("splits emitted traces when session.id differs", () => {
+    const originalTraceId = "12121212121212121212121212121212";
+    const request: ProtoExportTraceServiceRequest = {
+      resourceSpans: [
+        {
+          scopeSpans: [
+            {
+              spans: [
+                {
+                  traceId: hexToBytes(originalTraceId),
+                  spanId: hexToBytes("1111111111111111"),
+                  parentSpanId: new Uint8Array(),
+                  name: "ai.streamText",
+                  attributes: [
+                    { key: "ai.agent.name", value: { stringValue: "worker" } },
+                    { key: "session.id", value: { stringValue: "session-a" } },
+                    { key: "ai.prompt", value: { stringValue: "first" } },
+                  ],
+                },
+                {
+                  traceId: hexToBytes(originalTraceId),
+                  spanId: hexToBytes("2222222222222222"),
+                  parentSpanId: hexToBytes("1111111111111111"),
+                  name: "ai.streamText.doStream",
+                },
+                {
+                  traceId: hexToBytes(originalTraceId),
+                  spanId: hexToBytes("3333333333333333"),
+                  parentSpanId: new Uint8Array(),
+                  name: "ai.streamText",
+                  attributes: [
+                    { key: "ai.agent.name", value: { stringValue: "worker" } },
+                    { key: "session.id", value: { stringValue: "session-b" } },
+                    {
+                      key: "langfuse.trace.output",
+                      value: { stringValue: "second" },
+                    },
+                  ],
+                },
+                {
+                  traceId: hexToBytes(originalTraceId),
+                  spanId: hexToBytes("4444444444444444"),
+                  parentSpanId: hexToBytes("3333333333333333"),
+                  name: "ai.streamText.doStream",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const { request: transformed, stats } = applySyntheticToolSpans(request);
+    const spans = flattenSpans(transformed);
+    const parents = spans.filter((span) => span.name === "ai.agent");
+    const streamTexts = spans.filter((span) => span.name === "ai.streamText");
+
+    expect(stats.ai_streamtext_parents_added).toBe(2);
+    expect(parents).toHaveLength(2);
+    expect(streamTexts).toHaveLength(2);
+    expect(new Set(parents.map((span) => bytesToHex(span.traceId))).size).toBe(2);
+    expect(parents.every((span) => bytesToHex(span.traceId) !== originalTraceId)).toBe(
+      true,
+    );
+    for (const streamText of streamTexts) {
+      const parent = parents.find(
+        (span) => bytesToHex(span.spanId) === bytesToHex(streamText.parentSpanId),
+      );
+      expect(parent).toBeTruthy();
+      expect(bytesToHex(streamText.traceId)).toBe(bytesToHex(parent!.traceId));
+    }
+  });
+
   it("uses latest end-time ai.streamText for ai.agent output", () => {
     const request: ProtoExportTraceServiceRequest = {
       resourceSpans: [
@@ -651,7 +943,7 @@ describe("applySyntheticToolSpans", () => {
     expect(bytesToHex(child!.parentSpanId)).toBe("1111111111111111");
   });
 
-  it("reparents other top-level ai spans under synthetic ai.agent", () => {
+  it("removes ai.generateObject spans from output payload", () => {
     const request: ProtoExportTraceServiceRequest = {
       resourceSpans: [
         {
@@ -696,14 +988,14 @@ describe("applySyntheticToolSpans", () => {
       ],
     };
 
-    const { request: transformed } = applySyntheticToolSpans(request);
+    const { request: transformed, stats } = applySyntheticToolSpans(request);
     const spans = flattenSpans(transformed);
     const parent = spans.find((span) => span.name === "ai.agent");
-    const generateObject = spans.find((span) => span.name === "ai.generateObject");
 
     expect(parent).toBeTruthy();
-    expect(generateObject).toBeTruthy();
-    expect(bytesToHex(generateObject!.parentSpanId)).toBe(bytesToHex(parent!.spanId));
+    expect(stats.non_ai_spans_removed).toBe(2);
+    expect(spans.some((span) => span.name === "ai.generateObject")).toBe(false);
+    expect(spans.some((span) => span.name === "ai.generateObject.doGenerate")).toBe(false);
   });
 
   it("removes non-ai spans from output payload", () => {

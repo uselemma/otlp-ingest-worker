@@ -7,6 +7,7 @@ import type {
   StoredResource,
   StoredScope,
   StoredSpanEntry,
+  StoredSpanR2Entry,
   TraceBufferAppendRequest,
   TraceBufferMetaState,
 } from "./trace-buffer.types";
@@ -20,6 +21,7 @@ const DEBOUNCE_MS = 30_000;
 const DEFAULT_MAX_BUFFER_MS = 600_000;
 const DEFAULT_MAX_SPANS_PER_TRACE = 5_000;
 const DEFAULT_MAX_DISPATCH_RETRIES = 5;
+const MAX_INLINE_STORED_SPAN_ENTRY_BYTES = 512_000;
 
 function getNumberVar(
   value: string | undefined,
@@ -64,6 +66,14 @@ function hexToBytes(value: string | undefined): Uint8Array {
 
 function toFlushBackoffMs(attempt: number): number {
   return Math.min(60_000, 2 ** attempt * 1_000);
+}
+
+function utf8Size(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+
+function sanitizeKeyPart(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._=-]/g, "_");
 }
 
 export class TraceBuffer implements DurableObject {
@@ -159,7 +169,6 @@ export class TraceBuffer implements DurableObject {
         },
       );
     }
-
     const now = Date.now();
     const meta =
       (await this.state.storage.get<TraceBufferMetaState>(META_STATE_KEY)) ?? {
@@ -182,13 +191,27 @@ export class TraceBuffer implements DurableObject {
       const existing = await this.state.storage.get<StoredSpanEntry>(spanKey);
       const resourceFp = fingerprint(record.resource ?? {});
       const scopeFp = fingerprint(record.scope ?? {});
-      writes[`${RESOURCE_PREFIX}${resourceFp}`] = record.resource;
-      writes[`${SCOPE_PREFIX}${scopeFp}`] = record.scope;
-      writes[spanKey] = {
+      const inlineEntry = {
         span: record.span,
         resourceFp,
         scopeFp,
       } satisfies StoredSpanEntry;
+      if (utf8Size(inlineEntry) > MAX_INLINE_STORED_SPAN_ENTRY_BYTES) {
+        const spanR2Key = await this.writeOversizedSpanEntry({
+          ...inlineEntry,
+          resource: record.resource,
+          scope: record.scope,
+        });
+        writes[spanKey] = {
+          spanR2Key,
+          resourceFp,
+          scopeFp,
+        } satisfies StoredSpanEntry;
+      } else {
+        writes[`${RESOURCE_PREFIX}${resourceFp}`] = record.resource;
+        writes[`${SCOPE_PREFIX}${scopeFp}`] = record.scope;
+        writes[spanKey] = inlineEntry;
+      }
       if (!existing) {
         newSpans += 1;
       }
@@ -264,30 +287,35 @@ export class TraceBuffer implements DurableObject {
       {
         resourceFp: string;
         scopeFp: string;
-        spans: StoredSpanEntry["span"][];
+        resource: StoredResource;
+        scope: StoredScope;
+        spans: NonNullable<StoredSpanEntry["span"]>[];
       }
     >();
 
     for (const entry of spanEntries.values()) {
+      const resolved = await this.resolveStoredSpanEntry(entry);
       const key = `${entry.resourceFp}|${entry.scopeFp}`;
       const existing = byResourceScope.get(key);
       if (existing) {
-        existing.spans.push(entry.span);
+        existing.spans.push(resolved.span);
       } else {
         byResourceScope.set(key, {
           resourceFp: entry.resourceFp,
           scopeFp: entry.scopeFp,
-          spans: [entry.span],
+          resource: resolved.resource,
+          scope: resolved.scope,
+          spans: [resolved.span],
         });
       }
     }
 
     return {
       resourceSpans: [...byResourceScope.values()].map((group) => ({
-        resource: resources.get(`${RESOURCE_PREFIX}${group.resourceFp}`),
+        resource: group.resource ?? resources.get(`${RESOURCE_PREFIX}${group.resourceFp}`),
         scopeSpans: [
           {
-            scope: scopes.get(`${SCOPE_PREFIX}${group.scopeFp}`),
+            scope: group.scope ?? scopes.get(`${SCOPE_PREFIX}${group.scopeFp}`),
             spans: group.spans.map((span) => ({
               ...span,
               traceId: hexToBytes(span.traceId),
@@ -317,4 +345,52 @@ export class TraceBuffer implements DurableObject {
     });
     return key;
   }
+
+  private async writeOversizedSpanEntry(
+    entry: StoredSpanR2Entry,
+  ): Promise<string> {
+    const key = `trace-buffer-spans/${sanitizeKeyPart(entry.span.traceId)}/${sanitizeKeyPart(entry.span.spanId)}.json`;
+    await this.env.OTEL_BUCKET.put(
+      key,
+      new TextEncoder().encode(JSON.stringify(entry)),
+      {
+        customMetadata: {
+          trace_id: entry.span.traceId,
+          span_id: entry.span.spanId,
+        },
+        httpMetadata: {
+          contentType: "application/json",
+        },
+      },
+    );
+    return key;
+  }
+
+  private async resolveStoredSpanEntry(entry: StoredSpanEntry): Promise<{
+    span: NonNullable<StoredSpanEntry["span"]>;
+    resource: StoredResource;
+    scope: StoredScope;
+  }> {
+    if (entry.span) {
+      return {
+        span: entry.span,
+        resource: undefined,
+        scope: undefined,
+      };
+    }
+    if (!entry.spanR2Key) {
+      throw new Error("Stored span entry is missing span and spanR2Key");
+    }
+    const object = await this.env.OTEL_BUCKET.get(entry.spanR2Key);
+    if (!object) {
+      throw new Error(`Missing spilled trace-buffer span: ${entry.spanR2Key}`);
+    }
+    const spilled = JSON.parse(await object.text()) as StoredSpanR2Entry;
+    return {
+      span: spilled.span,
+      resource: spilled.resource,
+      scope: spilled.scope,
+    };
+  }
+
 }

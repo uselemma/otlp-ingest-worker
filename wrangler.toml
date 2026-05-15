@@ -48,6 +48,8 @@ subrequests = 200
 [vars]
 OTEL_PAYLOAD_KEY_PREFIX = "otel:payload:v1"
 OTEL_PAYLOAD_TTL_SECONDS = "3600"
+PROCESSOR_BUFFERED_REPARENT_DEBUG_PAYLOADS = "false"
+PROCESSOR_BUFFERED_REPARENT_DEBUG_PAYLOAD_PREFIX = "debug/processor-buffered-reparent"
 
 [[durable_objects.bindings]]
 name = "TRACE_BUFFER"

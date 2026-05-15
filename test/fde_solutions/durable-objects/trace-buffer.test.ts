@@ -58,6 +58,7 @@ function makeState(storage: MemoryStorage): DurableObjectState {
 function makeEnv(overrides?: {
   queueSend?: ReturnType<typeof vi.fn>;
   bucketPut?: ReturnType<typeof vi.fn>;
+  bucketGet?: ReturnType<typeof vi.fn>;
 }): Env {
   return {
     INFISICAL_CLIENT_ID: "client-id",
@@ -74,6 +75,7 @@ function makeEnv(overrides?: {
     } as unknown as Queue<OtelSpanInsertQueueMessage>,
     OTEL_BUCKET: {
       put: overrides?.bucketPut ?? vi.fn(async () => undefined),
+      get: overrides?.bucketGet ?? vi.fn(async () => null),
     } as unknown as R2Bucket,
     CORE: {} as Fetcher,
     TRACE_BUFFER: {
@@ -422,6 +424,70 @@ describe("TraceBuffer durable object", () => {
     });
     await traceBuffer.alarm();
     expect(queueSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("spills oversized span entries to R2 before buffering", async () => {
+    const storage = new MemoryStorage();
+    const r2Objects = new Map<string, Uint8Array>();
+    const bucketPut = vi.fn(async (key: string, body: Uint8Array) => {
+      r2Objects.set(key, body);
+    });
+    const bucketGet = vi.fn(async (key: string) => {
+      const body = r2Objects.get(key);
+      if (!body) return null;
+      return {
+        text: async () => new TextDecoder().decode(body),
+      };
+    });
+    const queueSend = vi.fn(async () => undefined);
+    const traceBuffer = new TraceBuffer(
+      makeState(storage),
+      makeEnv({ bucketPut, bucketGet, queueSend }),
+    );
+    const largePrompt = "x".repeat(600_000);
+
+    await traceBuffer.fetch(
+      createRequest({
+        projectId: "00000000-0000-0000-0000-000000000001",
+        traceIdHex: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        requestedAt: "2026-01-01T00:00:00.000Z",
+        records: [
+          {
+            span: {
+              traceId: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              spanId: "1111111111111111",
+              parentSpanId: "",
+              name: "ai.streamText",
+              attributes: [
+                {
+                  key: "ai.prompt",
+                  value: { stringValue: largePrompt },
+                },
+                {
+                  key: "langfuse.trace.output",
+                  value: { stringValue: "done" },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+
+    const meta = await storage.get<{ lastAppendAt: number }>("meta:state");
+    await storage.put("meta:state", {
+      ...(meta ?? {}),
+      lastAppendAt: 0,
+    });
+    await traceBuffer.alarm();
+
+    expect(queueSend).toHaveBeenCalledTimes(1);
+    expect(bucketGet).toHaveBeenCalledWith(
+      "trace-buffer-spans/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee/1111111111111111.json",
+    );
+    expect(
+      [...r2Objects.keys()].some((key) => key.startsWith("trace-buffer-spans/")),
+    ).toBe(true);
   });
 
   it("retries dispatch and dead-letters after max attempts", async () => {
