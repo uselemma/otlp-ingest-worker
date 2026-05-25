@@ -79,11 +79,6 @@ export async function handleOtlpV1Traces(
   request: Request,
   env: Env,
 ): Promise<Response> {
-  const auth = await validateOtlpHttpAuth(request, env);
-  if (!auth.ok) {
-    return buildJsonError(auth.status, auth.detail);
-  }
-
   const url = new URL(request.url);
   const projectId = resolveProjectId(request, url);
   if (!isValidProjectId(projectId)) {
@@ -91,6 +86,11 @@ export async function handleOtlpV1Traces(
       400,
       "project_id must be provided as either Lemma-Project-ID header or project_id query parameter",
     );
+  }
+
+  const auth = await validateOtlpHttpAuth(request, env, projectId);
+  if (!auth.ok) {
+    return buildJsonError(auth.status, auth.detail);
   }
 
   try {
