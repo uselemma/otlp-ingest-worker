@@ -17,6 +17,7 @@ function extractBearerToken(request: Request): string | null {
 export async function validateOtlpHttpAuth(
   request: Request,
   env: Env,
+  projectId: string,
 ): Promise<OtlpHttpAuthResult> {
   const token = extractBearerToken(request);
   if (!token) {
@@ -42,7 +43,7 @@ export async function validateOtlpHttpAuth(
         "Content-Type": "application/json",
         Authorization: `Bearer ${workerSharedSecret}`,
       },
-      body: JSON.stringify({ token }),
+      body: JSON.stringify({ token, project_id: projectId }),
     }),
   );
 
