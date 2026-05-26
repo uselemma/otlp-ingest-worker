@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { Env, OtelSpanInsertQueueMessage } from "../../../src/config";
-import { TraceBuffer } from "../../../src/fde_solutions/durable-objects/trace-buffer";
-import type { TraceBufferAppendRequest } from "../../../src/fde_solutions/durable-objects/trace-buffer.types";
+import type { Env, OtelSpanInsertQueueMessage } from "../../../../src/config";
+import { TraceBuffer } from "../../../../src/fde_solutions/processor-buffered-reparent/durable-objects/trace-buffer";
+import type { TraceBufferAppendRequest } from "../../../../src/fde_solutions/processor-buffered-reparent/durable-objects/trace-buffer.types";
 
 class MemoryStorage {
   private readonly map = new Map<string, unknown>();

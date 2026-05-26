@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { reparentToolSpans } from "../../../src/fde_solutions/transforms/reparent-tool-spans";
-import { bytesToHex, type ProtoExportTraceServiceRequest } from "../../../src/otel/decode";
+import { reparentToolSpans } from "../../../../src/fde_solutions/processor-buffered-reparent/transforms/reparent-tool-spans";
+import { bytesToHex, type ProtoExportTraceServiceRequest } from "../../../../src/otel/decode";
 
 function hexToBytes(value: string): Uint8Array {
   const bytes = new Uint8Array(value.length / 2);

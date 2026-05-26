@@ -1,6 +1,6 @@
-import type { FdeSolution, SolutionContext } from "../types";
-import { groupByTraceId } from "../transforms/group-by-trace";
-import type { TraceBufferAppendRequest } from "../durable-objects/trace-buffer.types";
+import type { FdeSolution, SolutionContext } from "../router";
+import type { TraceBufferAppendRequest } from "./durable-objects/trace-buffer.types";
+import { groupByTraceId } from "./transforms/group-by-trace";
 
 const MAX_TRACE_GROUPS_PER_REQUEST = 100;
 const DEFAULT_DEBUG_PAYLOAD_PREFIX = "debug/processor-buffered-reparent";

@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { Env, OtelSpanInsertQueueMessage } from "../../../src/config";
-import { processorBufferedReparentSolution } from "../../../src/fde_solutions/solutions/processor-buffered-reparent";
-import type { SolutionContext } from "../../../src/fde_solutions/types";
+import { processorBufferedReparentSolution } from "../../../src/fde_solutions/processor-buffered-reparent";
+import type { SolutionContext } from "../../../src/fde_solutions";
 import type { ProtoExportTraceServiceRequest } from "../../../src/otel/decode";
 
 function hexToBytes(value: string): Uint8Array {
