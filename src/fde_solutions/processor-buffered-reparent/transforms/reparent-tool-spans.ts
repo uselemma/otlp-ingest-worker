@@ -1,5 +1,5 @@
-import { bytesToHex } from "../../otel/decode";
-import type { ProtoExportTraceServiceRequest } from "../../otel/decode";
+import { bytesToHex } from "../../../otel/decode";
+import type { ProtoExportTraceServiceRequest } from "../../../otel/decode";
 
 type ProtoResourceSpan = NonNullable<
   ProtoExportTraceServiceRequest["resourceSpans"]

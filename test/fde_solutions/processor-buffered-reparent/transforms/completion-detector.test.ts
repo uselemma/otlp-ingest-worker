@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { isCompletingSpan } from "../../../src/fde_solutions/transforms/completion-detector";
-import type { ProtoExportTraceServiceRequest } from "../../../src/otel/decode";
+import { isCompletingSpan } from "../../../../src/fde_solutions/processor-buffered-reparent/transforms/completion-detector";
+import type { ProtoExportTraceServiceRequest } from "../../../../src/otel/decode";
 
 type ProtoSpan = NonNullable<
   NonNullable<

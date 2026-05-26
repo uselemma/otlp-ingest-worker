@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { groupByTraceId } from "../../../src/fde_solutions/transforms/group-by-trace";
-import type { ProtoExportTraceServiceRequest } from "../../../src/otel/decode";
+import { groupByTraceId } from "../../../../src/fde_solutions/processor-buffered-reparent/transforms/group-by-trace";
+import type { ProtoExportTraceServiceRequest } from "../../../../src/otel/decode";
 
 function hexToBytes(value: string): Uint8Array {
   const bytes = new Uint8Array(value.length / 2);

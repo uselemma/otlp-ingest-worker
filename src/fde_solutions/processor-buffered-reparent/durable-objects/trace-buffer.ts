@@ -1,6 +1,6 @@
-import type { Env } from "../../config";
-import type { ProtoExportTraceServiceRequest } from "../../otel/decode";
-import { runStandardIngest } from "../../pipeline/run-standard-ingest";
+import type { Env } from "../../../config";
+import type { ProtoExportTraceServiceRequest } from "../../../otel/decode";
+import { runStandardIngest } from "../../../pipeline/run-standard-ingest";
 import { applySyntheticToolSpans } from "../transforms/synthetic-tool-spans";
 import { isCompletingSpan } from "../transforms/completion-detector";
 import type {

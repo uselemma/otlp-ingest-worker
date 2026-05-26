@@ -1,4 +1,4 @@
-import type { FdeSolution } from "../types";
+import type { FdeSolution } from "../router";
 
 /**
  * Drops every payload on the floor. The OTLP client still sees a 200 OK so it

@@ -1,4 +1,4 @@
-import type { ProtoExportTraceServiceRequest } from "../../otel/decode";
+import type { ProtoExportTraceServiceRequest } from "../../../otel/decode";
 import type { BufferedSpanRecord } from "../transforms/group-by-trace";
 
 type ProtoResourceSpan = NonNullable<
