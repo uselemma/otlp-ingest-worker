@@ -1,7 +1,6 @@
 import root from "@opentelemetry/otlp-transformer/build/src/generated/root.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import * as otlpHttpAuth from "../src/auth/otlp-http-auth";
 import type { Env, OtelSpanInsertQueueMessage } from "../src/config";
 import worker from "../src/index";
 import {
@@ -9,12 +8,6 @@ import {
   LEMMA_TRACE_PAYLOAD_VERSION,
 } from "../src/otel/lemma-trace-payload";
 import { OTLP_PAYLOAD_POINTER_VERSION } from "../src/shared/common/index";
-
-vi.mock("../src/auth/otlp-http-auth", () => ({
-  validateOtlpHttpAuth: vi.fn(),
-}));
-
-const mockedAuth = vi.mocked(otlpHttpAuth.validateOtlpHttpAuth);
 
 const PROJECT_ID = "00000000-0000-0000-0000-000000000001";
 const TRACE_ID = "5b8efff798038103d269b633813fc60c";
@@ -155,20 +148,13 @@ async function gunzipBody(body: Uint8Array): Promise<Uint8Array> {
 describe("POST /otel/v1/traces", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockedAuth.mockResolvedValue({ ok: true });
   });
 
-  it("returns 401 when auth fails", async () => {
-    mockedAuth.mockResolvedValueOnce({
-      ok: false,
-      status: 401,
-      detail: "You must be authenticated",
-    });
+  it("does not validate public bearer auth in the OTLP worker", async () => {
     const env = makeEnv();
     const request = new Request("https://worker.example/otel/v1/traces", {
       method: "POST",
       headers: {
-        Authorization: "Bearer x",
         "X-Lemma-Project-ID": PROJECT_ID,
         "Content-Type": "application/x-protobuf",
       },
@@ -176,7 +162,7 @@ describe("POST /otel/v1/traces", () => {
     });
 
     const response = await worker.fetch(request, env, createExecutionContext());
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(200);
   });
 
   it("accepts protobuf payload", async () => {

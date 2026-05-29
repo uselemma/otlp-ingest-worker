@@ -1,5 +1,4 @@
 import type { Env } from "../config";
-import { validateOtlpHttpAuth } from "../auth/otlp-http-auth";
 import { resolveSolutionForProject } from "../fde_solutions";
 import { decodeRequest, type ProtoExportTraceServiceRequest } from "../otel/decode";
 import {
@@ -88,11 +87,6 @@ export async function handleOtlpV1Traces(
     );
   }
 
-  const auth = await validateOtlpHttpAuth(request, env, projectId);
-  if (!auth.ok) {
-    return buildJsonError(auth.status, auth.detail);
-  }
-
   try {
     const requestedAt = new Date().toISOString();
     let parsedMemo: ProtoExportTraceServiceRequest | null = null;
@@ -120,7 +114,7 @@ export async function handleOtlpV1Traces(
       };
 
     // FDE solutions take precedence over the standard pipeline. They run after
-    // auth + project_id validation but BEFORE we read/decode the body, so a
+    // project_id validation but BEFORE we read/decode the body, so a
     // matched solution can choose to no-op, transform, or short-circuit.
     const fdeSolution = resolveSolutionForProject(projectId);
     if (fdeSolution) {
