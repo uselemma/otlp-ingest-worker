@@ -14,9 +14,9 @@
     }
   },
   "scripts": {
-    "predev": "sh -c 'lsof -tiTCP:8789,9231 -sTCP:LISTEN | xargs -I {} kill {} 2>/dev/null || true'",
-    "dev": "wrangler dev --config wrangler.local.toml --port 8789 --inspector-port 9231 --log-level info",
-    "dev:remote": "wrangler dev --remote --port 8789 --inspector-port 9231 --log-level info",
+    "predev": "sh -c 'lsof -tiTCP:4318,9231 -sTCP:LISTEN | xargs -I {} kill {} 2>/dev/null || true'",
+    "dev": "wrangler dev --config wrangler.local.toml --port 4318 --inspector-port 9231 --log-level info",
+    "dev:remote": "wrangler dev --remote --port 4318 --inspector-port 9231 --log-level info",
     "deploy": "wrangler deploy",
     "type-check": "tsc --noEmit",
     "test": "vitest run"
