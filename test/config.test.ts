@@ -12,14 +12,12 @@ describe("resolveEnv", () => {
     };
 
     const resolved = await resolveEnv({
-      INFISICAL_CLIENT_ID: "client-id",
-      INFISICAL_CLIENT_SECRET: "client-secret",
-      INFISICAL_PROJECT_ID: "project-id",
       WORKER_SHARED_SECRET: workerSecretBinding,
-      OTEL_SPAN_INSERT_QUEUE: {} as Queue<{ project_id: string; requested_at: string; payload_key: string }>,
-      OTEL_SPAN_INSERT_DLQ: {} as Queue<{ project_id: string; requested_at: string; payload_key: string }>,
+      S3_ENDPOINT: "https://s3.example",
+      S3_REGION: "us-east-1",
+      OTEL_PUT_ACCESS_KEY_ID: "garage-key",
+      OTEL_PUT_SECRET_ACCESS_KEY: "garage-secret",
       OTEL_BUCKET: {} as R2Bucket,
-      CORE: {} as Fetcher,
       TRACE_BUFFER: {
         idFromName: vi.fn(),
         get: vi.fn(),
@@ -28,5 +26,31 @@ describe("resolveEnv", () => {
 
     expect(workerSecretBinding.get).toHaveBeenCalledTimes(1);
     expect(resolved.WORKER_SHARED_SECRET).toBe("shared-secret");
+  });
+});
+
+describe("resolveS3Config", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  const baseEnv = {
+    WORKER_SHARED_SECRET: "shared-secret",
+    S3_ENDPOINT: "https://s3.example",
+    S3_REGION: "us-east-1",
+    OTEL_BUCKET: {} as R2Bucket,
+    TRACE_BUFFER: {} as DurableObjectNamespace,
+  };
+
+  it("builds the client config from the OTEL_PUT_* creds", async () => {
+    const { resolveS3Config } = await import("../src/config");
+    const config = await resolveS3Config({
+      ...baseEnv,
+      OTEL_PUT_ACCESS_KEY_ID: "put-key",
+      OTEL_PUT_SECRET_ACCESS_KEY: "put-secret",
+    } as unknown as Parameters<typeof resolveS3Config>[0]);
+
+    expect(config.accessKeyId).toBe("put-key");
+    expect(config.secretAccessKey).toBe("put-secret");
   });
 });

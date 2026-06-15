@@ -1,6 +1,6 @@
 # Lemma OTLP Worker
 
-Standalone Cloudflare Worker for OTLP HTTP trace ingest (`POST /otel/v1/traces`), R2 gzip storage, and **`otel-span-insert`** queue production. The public API worker validates bearer auth before forwarding via service binding; **`core`** consumes the queue for database inserts and process-trace workflows.
+Standalone Cloudflare Worker for OTLP HTTP trace ingest (`POST /otel/v1/traces`), R2 gzip storage, and **`otel-span-insert`** queue production. Each request is authorized and payload processing enqueued via the Lemma API; **`core`** consumes the queue for database inserts and process-trace workflows.
 
 Maintained as its own repository with no code dependency on other Lemma app repos.
 

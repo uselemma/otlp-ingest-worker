@@ -22,8 +22,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@infisical/sdk": "5.0.1",
-    "@opentelemetry/otlp-transformer": "0.214.0"
+    "@opentelemetry/otlp-transformer": "0.214.0",
+    "aws4fetch": "^1.0.20"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260410.0",

@@ -1,4 +1,4 @@
-import type { Env, OtelSpanInsertQueueMessage } from "../config";
+import type { Env, OtelSpanInsertPointer } from "../config";
 import { buildLemmaTracePayload } from "../otel/build-payload";
 import type { ProtoExportTraceServiceRequest } from "../otel/decode";
 import { LEMMA_TRACE_PAYLOAD_FORMAT } from "../otel/lemma-trace-payload";
@@ -30,45 +30,52 @@ export class OtlpHttpTraceError extends Error {
 }
 
 /**
- * Local-dev bypass: post the gzipped Lemma trace JSON straight to core via the
- * CORE service binding instead of going through R2 + queue.
+ * Append the payload pointer to the ingest stream via the Lemma API. The
+ * bearer token carries the authorization: the client's own token on the hot
+ * path (the API validates project ownership), or WORKER_SHARED_SECRET for
+ * deferred flushes that no longer hold a client token. A 2xx means durably
+ * queued; anything else surfaces as a retryable error and the stored payload
+ * expires via the bucket lifecycle.
  */
-async function dispatchInlineToCore(
+async function enqueuePointer(
   env: Env,
-  projectId: string,
-  gzipped: Uint8Array,
-  requestedAt: string,
-): Promise<Response> {
-  const workerSharedSecret =
-    typeof env.WORKER_SHARED_SECRET === "string"
-      ? env.WORKER_SHARED_SECRET.trim()
-      : "";
-  if (!workerSharedSecret) {
+  pointer: OtelSpanInsertPointer,
+  authorization: string,
+): Promise<void> {
+  const apiBaseUrl =
+    typeof env.LEMMA_API_URL === "string" ? env.LEMMA_API_URL.trim() : "";
+  if (!apiBaseUrl) {
     throw new OtlpHttpTraceError(
       503,
-      "WORKER_SHARED_SECRET is not configured for inline dispatch",
+      "Ingest enqueue is not configured (LEMMA_API_URL)",
     );
   }
 
-  // payload_key is informational in the inline path (no R2 round-trip), but we
-  // still generate one so logs/workflow correlation in core match prod.
-  const payloadKey = `inline:dev/${projectId}/${requestedAt}`;
-
-  return env.CORE.fetch(
-    new Request("https://core.internal/internal/otlp/ingest-inline", {
+  let response: Response;
+  try {
+    response = await fetch(`${apiBaseUrl.replace(/\/+$/, "")}/otlp/enqueue`, {
       method: "POST",
       headers: {
-        "Content-Type": "application/octet-stream",
-        Authorization: `Bearer ${workerSharedSecret}`,
-        "X-Lemma-Project-ID": projectId,
-        "X-Lemma-Requested-At": requestedAt,
-        "X-Lemma-Payload-Format": LEMMA_TRACE_PAYLOAD_FORMAT,
-        "X-Lemma-Payload-Key": payloadKey,
-        "X-Lemma-Pointer-Version": String(OTLP_PAYLOAD_POINTER_VERSION),
+        authorization,
+        "Content-Type": "application/json",
       },
-      body: toStandaloneArrayBuffer(gzipped),
-    }),
-  );
+      body: JSON.stringify(pointer),
+    });
+  } catch {
+    throw new OtlpHttpTraceError(503, "Ingest enqueue is unavailable");
+  }
+
+  if (response.ok) {
+    return;
+  }
+  if (response.status >= 400 && response.status < 500) {
+    const detail = await response
+      .json()
+      .then((body) => (body as { detail?: string }).detail)
+      .catch(() => undefined);
+    throw new OtlpHttpTraceError(response.status, detail ?? "Not authorized");
+  }
+  throw new OtlpHttpTraceError(503, "Ingest enqueue is unavailable");
 }
 
 export async function runStandardIngest(args: {
@@ -76,28 +83,13 @@ export async function runStandardIngest(args: {
   projectId: string;
   requestedAt: string;
   parsed: ProtoExportTraceServiceRequest;
+  /** Bearer header for the enqueue call (client token or worker secret). */
+  authorization: string;
 }): Promise<Response> {
-  const { env, projectId, requestedAt, parsed } = args;
+  const { env, projectId, requestedAt, parsed, authorization } = args;
   const payload = buildLemmaTracePayload(parsed, projectId, requestedAt);
   const encoded = new TextEncoder().encode(JSON.stringify(payload));
   const gzipped = await gzipBody(encoded);
-
-  if (env.OTLP_DEV_INLINE_DISPATCH === "true") {
-    const inlineResponse = await dispatchInlineToCore(
-      env,
-      projectId,
-      gzipped,
-      requestedAt,
-    );
-    if (inlineResponse.status >= 200 && inlineResponse.status < 300) {
-      return new Response(null, { status: 200 });
-    }
-    const detail = await inlineResponse.text().catch(() => "");
-    throw new OtlpHttpTraceError(
-      502,
-      `Inline dispatch to core failed (${inlineResponse.status}): ${detail || "no detail"}`,
-    );
-  }
 
   const payloadKey = await putPayload(
     env,
@@ -107,13 +99,17 @@ export async function runStandardIngest(args: {
     "application/json",
   );
 
-  await env.OTEL_SPAN_INSERT_QUEUE.send({
-    project_id: projectId,
-    requested_at: requestedAt,
-    payload_key: payloadKey,
-    payload_format: LEMMA_TRACE_PAYLOAD_FORMAT,
-    version: OTLP_PAYLOAD_POINTER_VERSION,
-  } as OtelSpanInsertQueueMessage);
+  await enqueuePointer(
+    env,
+    {
+      project_id: projectId,
+      requested_at: requestedAt,
+      payload_key: payloadKey,
+      payload_format: LEMMA_TRACE_PAYLOAD_FORMAT,
+      version: OTLP_PAYLOAD_POINTER_VERSION,
+    },
+    authorization,
+  );
 
   return new Response(null, { status: 200 });
 }

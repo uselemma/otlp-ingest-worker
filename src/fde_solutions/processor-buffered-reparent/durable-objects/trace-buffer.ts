@@ -90,6 +90,18 @@ export class TraceBuffer implements DurableObject {
     return new Response("Not found", { status: 404 });
   }
 
+  /** WORKER_SHARED_SECRET may be a plain string or a Secrets Store binding. */
+  private async resolveWorkerSharedSecret(): Promise<string> {
+    const raw = this.env.WORKER_SHARED_SECRET;
+    const value =
+      typeof raw === "string" ? raw : raw ? await raw.get() : undefined;
+    const secret = value?.trim();
+    if (!secret) {
+      throw new Error("WORKER_SHARED_SECRET is not configured for flush");
+    }
+    return secret;
+  }
+
   async alarm(): Promise<void> {
     const meta = await this.state.storage.get<TraceBufferMetaState>(META_STATE_KEY);
     if (!meta) {
@@ -108,11 +120,15 @@ export class TraceBuffer implements DurableObject {
     const { request: transformed, stats } = applySyntheticToolSpans(merged);
 
     try {
+      // The client's token is not buffered for flush time; enqueue as the
+      // trusted worker principal (the client was authorized at accept time).
+      const workerSharedSecret = await this.resolveWorkerSharedSecret();
       await runStandardIngest({
         env: this.env,
         projectId: meta.projectId,
         requestedAt: new Date().toISOString(),
         parsed: transformed,
+        authorization: `Bearer ${workerSharedSecret}`,
       });
       console.log("trace_buffer.flushed", {
         project_id: meta.projectId,

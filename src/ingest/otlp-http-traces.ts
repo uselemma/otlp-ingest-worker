@@ -70,6 +70,47 @@ function resolveProjectId(request: Request, url: URL): string | null {
   return header ?? query;
 }
 
+/**
+ * Accept-time authorization for paths that respond 200 before any enqueue
+ * happens (the buffered/FDE path flushes minutes later from a Durable Object
+ * alarm with no client token in hand). Forwards the client's bearer token to
+ * `GET /otlp/authorize`. The standard path skips this: its enqueue call
+ * carries the auth itself, keeping the hot path at one API round trip.
+ */
+async function authorizeIngest(
+  env: Env,
+  projectId: string,
+  authorization: string,
+): Promise<Response | null> {
+  const apiBaseUrl =
+    typeof env.LEMMA_API_URL === "string" ? env.LEMMA_API_URL.trim() : "";
+  if (!apiBaseUrl) {
+    return buildJsonError(
+      503,
+      "OTLP authorization is not configured (LEMMA_API_URL)",
+    );
+  }
+
+  const authorizeUrl = `${apiBaseUrl.replace(/\/+$/, "")}/otlp/authorize?project_id=${encodeURIComponent(projectId)}`;
+  let response: Response;
+  try {
+    response = await fetch(authorizeUrl, { headers: { authorization } });
+  } catch {
+    return buildJsonError(503, "Authorization service is unavailable");
+  }
+
+  if (response.ok) {
+    return null;
+  }
+  if (response.status >= 400 && response.status < 500) {
+    const detail = await response
+      .json()
+      .then((body) => (body as { detail?: string }).detail)
+      .catch(() => undefined);
+    return buildJsonError(response.status, detail ?? "Not authorized");
+  }
+  return buildJsonError(503, "Authorization service is unavailable");
+}
 
 /**
  * Public OTLP HTTP ingest previously served by the Python API at `POST /otel/v1/traces`.
@@ -85,6 +126,11 @@ export async function handleOtlpV1Traces(
       400,
       "project_id must be provided as either Lemma-Project-ID header or project_id query parameter",
     );
+  }
+
+  const authorization = request.headers.get("authorization");
+  if (!authorization) {
+    return buildJsonError(401, "You must be authenticated");
   }
 
   try {
@@ -118,12 +164,19 @@ export async function handleOtlpV1Traces(
     // matched solution can choose to no-op, transform, or short-circuit.
     const fdeSolution = resolveSolutionForProject(projectId);
     if (fdeSolution) {
+      // Buffered solutions ack the client before anything is enqueued, so
+      // the client token must be validated at accept time.
+      const unauthorized = await authorizeIngest(env, projectId, authorization);
+      if (unauthorized) {
+        return unauthorized;
+      }
       console.log("fde_solution.matched", {
         solution: fdeSolution.name,
         project_id: projectId,
         requested_at: requestedAt,
       });
-      return fdeSolution.handle({
+      // `await` so rejections resolve inside this try and map to HTTP errors.
+      return await fdeSolution.handle({
         request,
         env,
         url,
@@ -131,12 +184,18 @@ export async function handleOtlpV1Traces(
         requestedAt,
         decodeRequest: decodeRequestMemoized,
         runStandardIngest: async (parsed) =>
-          runStandardIngest({ env, projectId, requestedAt, parsed }),
+          runStandardIngest({ env, projectId, requestedAt, parsed, authorization }),
       });
     }
 
     const parsed = await decodeRequestMemoized();
-    return runStandardIngest({ env, projectId, requestedAt, parsed });
+    return await runStandardIngest({
+      env,
+      projectId,
+      requestedAt,
+      parsed,
+      authorization,
+    });
   } catch (error) {
     if (error instanceof OtlpHttpTraceError) {
       return buildJsonError(error.status, error.message);

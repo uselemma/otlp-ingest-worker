@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { Env, OtelSpanInsertQueueMessage } from "../../../src/config";
+import type { Env } from "../../../src/config";
 import { processorBufferedReparentSolution } from "../../../src/fde_solutions/processor-buffered-reparent";
 import type { SolutionContext } from "../../../src/fde_solutions";
 import type { ProtoExportTraceServiceRequest } from "../../../src/otel/decode";
@@ -41,20 +41,10 @@ function makeContext(overrides?: {
 }): SolutionContext {
   const appendFetch = overrides?.appendFetch ?? vi.fn(async () => new Response(null, { status: 202 }));
   const env = {
-    INFISICAL_CLIENT_ID: "client-id",
-    INFISICAL_CLIENT_SECRET: "client-secret",
-    INFISICAL_PROJECT_ID: "project-id",
     WORKER_SHARED_SECRET: "worker-secret",
-    OTEL_SPAN_INSERT_QUEUE: {
-      send: vi.fn(async () => undefined),
-    } as unknown as Queue<OtelSpanInsertQueueMessage>,
-    OTEL_SPAN_INSERT_DLQ: {
-      send: vi.fn(async () => undefined),
-    } as unknown as Queue<OtelSpanInsertQueueMessage>,
     OTEL_BUCKET: {
       put: overrides?.bucketPut ?? vi.fn(async () => undefined),
     } as unknown as R2Bucket,
-    CORE: {} as Fetcher,
     TRACE_BUFFER: {
       idFromName: vi.fn(() => "trace-buffer-id" as unknown as DurableObjectId),
       get: vi.fn(() => ({ fetch: appendFetch }) as unknown as DurableObjectStub),
