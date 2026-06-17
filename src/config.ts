@@ -15,6 +15,7 @@ export interface OtelSpanInsertPointer {
 
 export interface Env {
   LEMMA_API_URL?: string;
+  API?: Fetcher;
 
   S3_ENDPOINT?: string;
   S3_REGION?: string;

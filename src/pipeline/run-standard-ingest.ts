@@ -1,4 +1,5 @@
 import type { Env, OtelSpanInsertPointer } from "../config";
+import { fetchLemmaApi } from "../lemma-api";
 import { buildLemmaTracePayload } from "../otel/build-payload";
 import type { ProtoExportTraceServiceRequest } from "../otel/decode";
 import { LEMMA_TRACE_PAYLOAD_FORMAT } from "../otel/lemma-trace-payload";
@@ -42,18 +43,9 @@ async function enqueuePointer(
   pointer: OtelSpanInsertPointer,
   authorization: string,
 ): Promise<void> {
-  const apiBaseUrl =
-    typeof env.LEMMA_API_URL === "string" ? env.LEMMA_API_URL.trim() : "";
-  if (!apiBaseUrl) {
-    throw new OtlpHttpTraceError(
-      503,
-      "Ingest enqueue is not configured (LEMMA_API_URL)",
-    );
-  }
-
   let response: Response;
   try {
-    response = await fetch(`${apiBaseUrl.replace(/\/+$/, "")}/otlp/enqueue`, {
+    response = await fetchLemmaApi(env, "/otlp/enqueue", {
       method: "POST",
       headers: {
         authorization,
