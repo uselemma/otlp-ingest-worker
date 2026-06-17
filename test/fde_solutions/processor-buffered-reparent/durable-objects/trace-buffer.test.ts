@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Env, OtelSpanInsertQueueMessage } from "../../../../src/config";
+import type { Env } from "../../../../src/config";
 import { TraceBuffer } from "../../../../src/fde_solutions/processor-buffered-reparent/durable-objects/trace-buffer";
 import type { TraceBufferAppendRequest } from "../../../../src/fde_solutions/processor-buffered-reparent/durable-objects/trace-buffer.types";
 
@@ -56,28 +56,23 @@ function makeState(storage: MemoryStorage): DurableObjectState {
 }
 
 function makeEnv(overrides?: {
-  queueSend?: ReturnType<typeof vi.fn>;
   bucketPut?: ReturnType<typeof vi.fn>;
   bucketGet?: ReturnType<typeof vi.fn>;
 }): Env {
   return {
-    INFISICAL_CLIENT_ID: "client-id",
-    INFISICAL_CLIENT_SECRET: "client-secret",
-    INFISICAL_PROJECT_ID: "project-id",
     WORKER_SHARED_SECRET: "worker-secret",
+    LEMMA_API_URL: "https://api.example",
+    S3_ENDPOINT: "https://s3.example",
+    S3_REGION: "us-east-1",
+    S3_OTEL_BUCKET: "otel",
+    OTEL_PUT_ACCESS_KEY_ID: "garage-key",
+    OTEL_PUT_SECRET_ACCESS_KEY: "garage-secret",
     OTEL_PAYLOAD_KEY_PREFIX: "otel:payload:v1",
     OTEL_PAYLOAD_TTL_SECONDS: "3600",
-    OTEL_SPAN_INSERT_QUEUE: {
-      send: overrides?.queueSend ?? vi.fn(async () => undefined),
-    } as unknown as Queue<OtelSpanInsertQueueMessage>,
-    OTEL_SPAN_INSERT_DLQ: {
-      send: vi.fn(async () => undefined),
-    } as unknown as Queue<OtelSpanInsertQueueMessage>,
     OTEL_BUCKET: {
       put: overrides?.bucketPut ?? vi.fn(async () => undefined),
       get: overrides?.bucketGet ?? vi.fn(async () => null),
     } as unknown as R2Bucket,
-    CORE: {} as Fetcher,
     TRACE_BUFFER: {
       idFromName: vi.fn(),
       get: vi.fn(),
@@ -104,6 +99,29 @@ async function gunzipBody(body: Uint8Array): Promise<Uint8Array> {
 }
 
 describe("TraceBuffer durable object", () => {
+  let enqueueFetch: ReturnType<typeof vi.fn>;
+  let s3Fetch: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    enqueueFetch = vi.fn(async () =>
+      Response.json({ stream: "otel-span-insert", entry_id: "1-0" }),
+    );
+    s3Fetch = vi.fn(async () => new Response(null, { status: 200 }));
+    // Dispatch by URL: payload PUTs go to the S3 stub, the rest to the API.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input instanceof Request ? input.url : String(input);
+        if (url.startsWith("https://s3.example/")) return s3Fetch(input, init);
+        return enqueueFetch(input, init);
+      }),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("deduplicates spans by span id", async () => {
     const storage = new MemoryStorage();
     const traceBuffer = new TraceBuffer(makeState(storage), makeEnv());
@@ -134,8 +152,7 @@ describe("TraceBuffer durable object", () => {
   it("debounces completion flush and emits synthetic tool spans", async () => {
     const storage = new MemoryStorage();
     const bucketPut = vi.fn(async () => undefined);
-    const queueSend = vi.fn(async () => undefined);
-    const env = makeEnv({ bucketPut, queueSend });
+    const env = makeEnv({ bucketPut });
     const traceBuffer = new TraceBuffer(makeState(storage), env);
 
     const payload: TraceBufferAppendRequest = {
@@ -246,7 +263,7 @@ describe("TraceBuffer durable object", () => {
 
     // completion should not flush immediately; debounce is 30s
     await traceBuffer.alarm();
-    expect(queueSend).toHaveBeenCalledTimes(0);
+    expect(enqueueFetch).toHaveBeenCalledTimes(0);
 
     // second append updates the same ai.streamText message payload before debounce expiry.
     await traceBuffer.fetch(
@@ -357,17 +374,15 @@ describe("TraceBuffer durable object", () => {
 
     await traceBuffer.alarm();
 
-    expect(queueSend).toHaveBeenCalledTimes(1);
-    expect(bucketPut).toHaveBeenCalledTimes(1);
+    expect(enqueueFetch).toHaveBeenCalledTimes(1);
+    // The flushed payload is uploaded via the S3 HTTP API, not the R2 binding.
+    expect(s3Fetch).toHaveBeenCalledTimes(1);
 
-    const bucketCalls = bucketPut.mock.calls as unknown as Array<
-      [string, Uint8Array, unknown?]
-    >;
-    const firstCall = bucketCalls[0];
-    expect(firstCall).toBeTruthy();
-    const storedBody = firstCall?.[1];
-    expect(storedBody).toBeInstanceOf(Uint8Array);
-    const decodedBody = await gunzipBody(storedBody!);
+    const payloadRequest = s3Fetch.mock.calls[0][0] as Request;
+    const storedBody = new Uint8Array(
+      await payloadRequest.clone().arrayBuffer(),
+    );
+    const decodedBody = await gunzipBody(storedBody);
     const parsed = JSON.parse(new TextDecoder().decode(decodedBody)) as {
       spans: Array<{ name: string; parent_otel_span_id: string | null }>;
     };
@@ -387,10 +402,9 @@ describe("TraceBuffer durable object", () => {
 
   it("flushes on inactivity when no completion span arrives", async () => {
     const storage = new MemoryStorage();
-    const queueSend = vi.fn(async () => undefined);
     const traceBuffer = new TraceBuffer(
       makeState(storage),
-      makeEnv({ queueSend }),
+      makeEnv(),
     );
 
     await traceBuffer.fetch(
@@ -423,7 +437,7 @@ describe("TraceBuffer durable object", () => {
       lastAppendAt: 0,
     });
     await traceBuffer.alarm();
-    expect(queueSend).toHaveBeenCalledTimes(1);
+    expect(enqueueFetch).toHaveBeenCalledTimes(1);
   });
 
   it("spills oversized span entries to R2 before buffering", async () => {
@@ -439,10 +453,9 @@ describe("TraceBuffer durable object", () => {
         text: async () => new TextDecoder().decode(body),
       };
     });
-    const queueSend = vi.fn(async () => undefined);
     const traceBuffer = new TraceBuffer(
       makeState(storage),
-      makeEnv({ bucketPut, bucketGet, queueSend }),
+      makeEnv({ bucketPut, bucketGet }),
     );
     const largePrompt = "x".repeat(600_000);
 
@@ -481,7 +494,7 @@ describe("TraceBuffer durable object", () => {
     });
     await traceBuffer.alarm();
 
-    expect(queueSend).toHaveBeenCalledTimes(1);
+    expect(enqueueFetch).toHaveBeenCalledTimes(1);
     expect(bucketGet).toHaveBeenCalledWith(
       "trace-buffer-spans/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee/1111111111111111.json",
     );
@@ -493,10 +506,10 @@ describe("TraceBuffer durable object", () => {
   it("retries dispatch and dead-letters after max attempts", async () => {
     const storage = new MemoryStorage();
     const bucketPut = vi.fn(async () => undefined);
-    const queueSend = vi.fn(async () => {
-      throw new Error("queue down");
+    enqueueFetch.mockImplementation(async () => {
+      throw new TypeError("enqueue down");
     });
-    const env = makeEnv({ bucketPut, queueSend });
+    const env = makeEnv({ bucketPut });
     const traceBuffer = new TraceBuffer(makeState(storage), env);
 
     await traceBuffer.fetch(

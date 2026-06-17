@@ -1,15 +1,11 @@
-# Infisical universal-auth credentials (align with the platform `core` worker secrets).
-# resolveEnv() uses these to pull secrets from Infisical at request time.
-INFISICAL_CLIENT_ID=
-INFISICAL_CLIENT_SECRET=
-INFISICAL_PROJECT_ID=
-INFISICAL_ENVIRONMENT=dev
+# Shared secret for deferred-flush auth against the Lemma API (must match the
+# API's WORKER_SHARED_SECRET).
+#
+# Not needed when running via the platform repo's `pnpm dev` — dev.sh injects
+# the AWS "env" secret and runs wrangler with CLOUDFLARE_INCLUDE_PROCESS_ENV,
+# so the value arrives via process env. Only needed for standalone runs
+# (`pnpm dev` from this directory), which bypass dev.sh.
+WORKER_SHARED_SECRET=
 
-# Optional: set WORKER_SHARED_SECRET (and other vars) directly to bypass Infisical for local dev.
-# WORKER_SHARED_SECRET=
-
-# Local-dev only: Wrangler's local Miniflare queue + R2 simulators are isolated per
-# `wrangler dev` process. With this flag the otlp worker skips the queue/R2 round-trip
-# and dispatches the gzipped payload synchronously to core via the CORE service binding.
-# Leave unset in production (real shared queue + R2).
-OTLP_DEV_INLINE_DISPATCH=true
+# The S3/payload-store config (S3_ENDPOINT, OTEL_PUT_* creds, etc.) comes from
+# wrangler.local.toml [vars] for plain local dev.

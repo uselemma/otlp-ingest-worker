@@ -46,8 +46,14 @@ cpu_ms = 5000
 subrequests = 200
 
 [vars]
+LEMMA_API_URL = "https://api.uselemma.ai"
+S3_ENDPOINT = "https://s3.us-west-2.amazonaws.com"
+S3_REGION = "us-west-2"
+S3_OTEL_BUCKET = "lemma-otel-prod"
+
 OTEL_PAYLOAD_KEY_PREFIX = "otel:payload:v1"
 OTEL_PAYLOAD_TTL_SECONDS = "3600"
+
 PROCESSOR_BUFFERED_REPARENT_DEBUG_PAYLOADS = "false"
 PROCESSOR_BUFFERED_REPARENT_DEBUG_PAYLOAD_PREFIX = "debug/processor-buffered-reparent"
 
@@ -59,42 +65,20 @@ class_name = "TraceBuffer"
 tag = "v1-trace-buffer"
 new_sqlite_classes = ["TraceBuffer"]
 
-[[services]]
-binding = "CORE"
-service = "core"
-
-[[secrets_store_secrets]]
-binding = "INFISICAL_CLIENT_ID"
-store_id = "c4ce9025292146d0a6a1deaba55aa24e"
-secret_name = "INFISICAL_CLIENT_ID"
-
-[[secrets_store_secrets]]
-binding = "INFISICAL_CLIENT_SECRET"
-store_id = "c4ce9025292146d0a6a1deaba55aa24e"
-secret_name = "INFISICAL_CLIENT_SECRET"
-
-[[secrets_store_secrets]]
-binding = "INFISICAL_ENVIRONMENT"
-store_id = "c4ce9025292146d0a6a1deaba55aa24e"
-secret_name = "INFISICAL_ENVIRONMENT"
-
-[[secrets_store_secrets]]
-binding = "INFISICAL_PROJECT_ID"
-store_id = "c4ce9025292146d0a6a1deaba55aa24e"
-secret_name = "INFISICAL_PROJECT_ID"
-
 [[secrets_store_secrets]]
 binding = "WORKER_SHARED_SECRET"
 store_id = "c4ce9025292146d0a6a1deaba55aa24e"
 secret_name = "WORKER_SHARED_SECRET"
 
-[[queues.producers]]
-binding = "OTEL_SPAN_INSERT_QUEUE"
-queue = "otel-span-insert"
+[[secrets_store_secrets]]
+binding = "OTEL_PUT_ACCESS_KEY_ID"
+store_id = "c4ce9025292146d0a6a1deaba55aa24e"
+secret_name = "OTEL_PUT_ACCESS_KEY_ID"
 
-[[queues.producers]]
-binding = "OTEL_SPAN_INSERT_DLQ"
-queue = "otel-span-insert-dlq"
+[[secrets_store_secrets]]
+binding = "OTEL_PUT_SECRET_ACCESS_KEY"
+store_id = "c4ce9025292146d0a6a1deaba55aa24e"
+secret_name = "OTEL_PUT_SECRET_ACCESS_KEY"
 
 [[rules]]
 type = "Text"

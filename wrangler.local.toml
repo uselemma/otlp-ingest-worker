@@ -13,8 +13,17 @@ binding = "OTEL_BUCKET"
 bucket_name = "otel"
 
 [vars]
+LEMMA_API_URL = "http://localhost:8000"
+S3_ENDPOINT = "http://localhost:3900"
+S3_REGION = "us-east-1"
+S3_OTEL_BUCKET = "lemma-otel-dev"
+
+OTEL_PUT_ACCESS_KEY_ID = "GK1a2b3c4d5e6f7081920a3b4c"
+OTEL_PUT_SECRET_ACCESS_KEY = "9f8e7d6c5b4a39281706f5e4d3c2b1a0fedcba98765432100011223344556677"
+
 OTEL_PAYLOAD_KEY_PREFIX = "otel:payload:v1"
 OTEL_PAYLOAD_TTL_SECONDS = "3600"
+
 PROCESSOR_BUFFERED_REPARENT_DEBUG_PAYLOADS = "true"
 PROCESSOR_BUFFERED_REPARENT_DEBUG_PAYLOAD_PREFIX = "debug/processor-buffered-reparent"
 
@@ -25,18 +34,6 @@ class_name = "TraceBuffer"
 [[migrations]]
 tag = "v1-trace-buffer"
 new_sqlite_classes = ["TraceBuffer"]
-
-[[services]]
-binding = "CORE"
-service = "core"
-
-[[queues.producers]]
-binding = "OTEL_SPAN_INSERT_QUEUE"
-queue = "otel-span-insert"
-
-[[queues.producers]]
-binding = "OTEL_SPAN_INSERT_DLQ"
-queue = "otel-span-insert-dlq"
 
 [[rules]]
 type = "Text"
