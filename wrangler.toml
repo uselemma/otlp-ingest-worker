@@ -3,6 +3,9 @@ main = "src/index.ts"
 compatibility_date = "2026-04-21"
 compatibility_flags = ["nodejs_compat"]
 
+[placement]
+region = "aws:us-west-2"
+
 [[r2_buckets]]
 binding = "OTEL_BUCKET"
 bucket_name = "otel"
@@ -49,13 +52,18 @@ subrequests = 200
 LEMMA_API_URL = "https://api.uselemma.ai"
 S3_ENDPOINT = "https://s3.us-west-2.amazonaws.com"
 S3_REGION = "us-west-2"
-S3_OTEL_BUCKET = "lemma-otel-prod"
+S3_OTEL_BUCKET = "lemma-otel"
 
 OTEL_PAYLOAD_KEY_PREFIX = "otel:payload:v1"
 OTEL_PAYLOAD_TTL_SECONDS = "3600"
 
 PROCESSOR_BUFFERED_REPARENT_DEBUG_PAYLOADS = "false"
 PROCESSOR_BUFFERED_REPARENT_DEBUG_PAYLOAD_PREFIX = "debug/processor-buffered-reparent"
+
+[[vpc_services]]
+binding = "API"
+service_id = "019ed450-2a67-79b0-9f77-0df69e1c20ca"
+remote = true
 
 [[durable_objects.bindings]]
 name = "TRACE_BUFFER"

@@ -1,4 +1,5 @@
 import type { Env } from "../config";
+import { fetchLemmaApi } from "../lemma-api";
 import { resolveSolutionForProject } from "../fde_solutions";
 import { decodeRequest, type ProtoExportTraceServiceRequest } from "../otel/decode";
 import {
@@ -82,19 +83,13 @@ async function authorizeIngest(
   projectId: string,
   authorization: string,
 ): Promise<Response | null> {
-  const apiBaseUrl =
-    typeof env.LEMMA_API_URL === "string" ? env.LEMMA_API_URL.trim() : "";
-  if (!apiBaseUrl) {
-    return buildJsonError(
-      503,
-      "OTLP authorization is not configured (LEMMA_API_URL)",
-    );
-  }
-
-  const authorizeUrl = `${apiBaseUrl.replace(/\/+$/, "")}/otlp/authorize?project_id=${encodeURIComponent(projectId)}`;
   let response: Response;
   try {
-    response = await fetch(authorizeUrl, { headers: { authorization } });
+    response = await fetchLemmaApi(
+      env,
+      `/otlp/authorize?project_id=${encodeURIComponent(projectId)}`,
+      { headers: { authorization } },
+    );
   } catch {
     return buildJsonError(503, "Authorization service is unavailable");
   }
