@@ -45,7 +45,7 @@ head_sampling_rate = 1
 destinations = ["dash-zero-prod-traces"]
 
 [limits]
-cpu_ms = 5000
+cpu_ms = 60000
 subrequests = 200
 
 [vars]
